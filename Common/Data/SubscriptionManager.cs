@@ -166,7 +166,10 @@ namespace QuantConnect.Data
         public void AddConsolidator(Symbol symbol, IDataConsolidator consolidator, TickType? tickType = null)
         {
             // Find the right subscription and add the consolidator to it
-            var subscriptions = Subscriptions.Where(x => x.Symbol == symbol).ToList();
+            // Include internal subscriptions since they can drive consolidators/indicators without sending data into the algorithm.
+            var subscriptions = SubscriptionDataConfigService
+                .GetSubscriptionDataConfigs(symbol, includeInternalConfigs: true)
+                .ToList();
 
             if (subscriptions.Count == 0)
             {
@@ -180,23 +183,57 @@ namespace QuantConnect.Data
                 tickType = AvailableDataTypes[symbol.SecurityType].FirstOrDefault();
             }
 
-            foreach (var subscription in subscriptions)
-            {
-                // we need to be able to pipe data directly from the data feed into the consolidator
-                if (IsSubscriptionValidForConsolidator(subscription, consolidator, tickType))
+            // If the consolidator can express its maximum input data period, apply Policy B:
+            // pick the lowest resolution (largest increment) subscription that can still satisfy it.
+            var maxInputDataPeriod = (consolidator as IConsolidatorInputDataRequirement)?.MaxInputDataPeriod;
+
+            var candidates = subscriptions
+                .Where(subscription =>
                 {
-                    subscription.Consolidators.Add(consolidator);
-
-                    var wrapper = _consolidators[consolidator] =
-                        new ConsolidatorWrapper(consolidator, subscription.Increment, _timeKeeper, _timeKeeper.GetLocalTimeKeeper(subscription.ExchangeTimeZone));
-
-                    lock (_threadSafeCollectionLock)
+                    if (tickType != null && subscription.TickType != tickType)
                     {
-                        _consolidatorsToAdd ??= new();
-                        _consolidatorsToAdd.Add(new(wrapper, wrapper.Priority));
+                        return false;
                     }
-                    return;
+
+                    // we need to be able to pipe data directly from the data feed into the consolidator
+                    return IsSubscriptionValidForConsolidator(subscription, consolidator, tickType);
+                })
+                .ToList();
+
+            if (maxInputDataPeriod.HasValue && maxInputDataPeriod.Value != TimeSpan.Zero)
+            {
+                var satisfiable = candidates.Where(x => x.Increment <= maxInputDataPeriod.Value).ToList();
+                if (satisfiable.Count != 0)
+                {
+                    candidates = satisfiable;
                 }
+            }
+
+            // deterministic ordering:
+            // - if we know the input period requirement: prefer lowest resolution that still works (largest increment)
+            // - otherwise: prefer highest resolution (smallest increment) to avoid losing information
+            candidates = (maxInputDataPeriod.HasValue && maxInputDataPeriod.Value != TimeSpan.Zero
+                    ? candidates.OrderByDescending(x => x.Increment)
+                    : candidates.OrderBy(x => x.Increment))
+                .ThenBy(x => x.IsInternalFeed)
+                .ThenBy(x => LeanData.IsCommonLeanDataType(x.Type))
+                .ThenBy(x => x.TickType)
+                .ToList();
+
+            if (candidates.Count != 0)
+            {
+                var subscription = candidates[0];
+                subscription.Consolidators.Add(consolidator);
+
+                var wrapper = _consolidators[consolidator] =
+                    new ConsolidatorWrapper(consolidator, subscription.Increment, _timeKeeper, _timeKeeper.GetLocalTimeKeeper(subscription.ExchangeTimeZone));
+
+                lock (_threadSafeCollectionLock)
+                {
+                    _consolidatorsToAdd ??= new();
+                    _consolidatorsToAdd.Add(new(wrapper, wrapper.Priority));
+                }
+                return;
             }
 
             string tickTypeException = null;
