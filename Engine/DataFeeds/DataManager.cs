@@ -31,7 +31,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
     /// <summary>
     /// DataManager will manage the subscriptions for both the DataFeeds and the SubscriptionManager
     /// </summary>
-    public class DataManager : IAlgorithmSubscriptionManager, IDataFeedSubscriptionManager, IDataManager
+    public class DataManager : IAlgorithmSubscriptionManager, IDataFeedSubscriptionManager, IDataManager, IAlgorithmDataFeedSubscriptionManager
     {
         private readonly IDataFeed _dataFeed;
         private readonly MarketHoursDatabase _marketHoursDatabase;
@@ -273,6 +273,14 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         /// <returns>True if the subscription was created and added successfully, false otherwise</returns>
         public bool AddSubscription(SubscriptionRequest request)
         {
+            if (request.Security != null
+                && request.Security.Symbol == request.Configuration.Symbol
+                && !request.Security.Subscriptions.Contains(request.Configuration))
+            {
+                // For now this is required for retro compatibility with usages of security.Subscriptions
+                request.Security.AddData(request.Configuration);
+            }
+
             lock (_subscriptionManagerSubscriptions)
             {
                 // guarantee the configuration is present in our config collection
@@ -329,6 +337,15 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             }
 
             return DataFeedSubscriptions.TryAdd(subscription);
+        }
+
+        /// <summary>
+        /// Ensures the requested subscription exists in the data feed.
+        /// </summary>
+        public bool EnsureSubscription(SubscriptionRequest request)
+        {
+            AddSubscription(request);
+            return DataFeedSubscriptions.Contains(request.Configuration);
         }
 
         /// <summary>

@@ -467,8 +467,17 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                 universe.RemoveMember(dateTimeUtc, member);
 
                 var isActive = _algorithm.UniverseManager.ActiveSecurities.ContainsKey(member.Symbol);
-                foreach (var subscription in universe.GetSubscriptionRequests(member, dateTimeUtc, algorithmEndDateUtc,
-                                                                              _algorithm.SubscriptionManager.SubscriptionDataConfigService))
+
+                var subscriptionRequests = universe.GetSubscriptionRequests(member, dateTimeUtc, algorithmEndDateUtc,
+                    _algorithm.SubscriptionManager.SubscriptionDataConfigService).ToList();
+
+                // also remove any other subscriptions that were attributed to this universe for the member
+                // (for example, additional resolution subscriptions requested outside the universe selector)
+                subscriptionRequests.AddRange(_dataManager.DataFeedSubscriptions
+                    .Where(s => s.Configuration.Symbol == member.Symbol)
+                    .SelectMany(s => s.SubscriptionRequests.Where(r => r.Universe == universe)));
+
+                foreach (var subscription in subscriptionRequests.DistinctBy(x => x.Configuration))
                 {
                     if (_dataManager.RemoveSubscription(subscription.Configuration, universe))
                     {

@@ -122,6 +122,58 @@ namespace QuantConnect.Tests.Engine.DataFeeds
         }
 
         [Test]
+        public void RemovalFromUniverseRemovesAdditionalUniverseAttributedSubscriptions()
+        {
+            SymbolCache.Clear();
+            var algorithm = new AlgorithmStub(new MockDataFeedWithSubscription());
+            var orderProcessorMock = new Mock<IOrderProcessor>();
+            orderProcessorMock.Setup(m => m.GetOpenOrders(It.IsAny<Func<Order, bool>>())).Returns(new List<Order>());
+            algorithm.Transactions.SetOrderProcessor(orderProcessorMock.Object);
+
+            algorithm.SetStartDate(2012, 3, 27);
+            algorithm.SetEndDate(2012, 3, 30);
+            algorithm.AddUniverse("my-custom-universe", dt => dt.Day < 30 ? new List<string> { "CPRT" } : Enumerable.Empty<string>());
+            algorithm.OnEndOfTimeStep();
+            var universe = algorithm.UniverseManager.Values.First();
+
+            // add the member
+            var securityChanges = algorithm.DataManager.UniverseSelection.ApplyUniverseSelection(
+                universe,
+                algorithm.EndDate.ConvertToUtc(algorithm.TimeZone).Subtract(TimeSpan.FromDays(2)),
+                new BaseDataCollection(
+                    algorithm.UtcTime,
+                    Symbol.Create("CPRT", SecurityType.Equity, Market.USA),
+                    new List<BaseData>()
+                )
+            );
+
+            var security = securityChanges.AddedSecurities.Single();
+            algorithm.Securities.Add(security);
+
+            // request an additional subscription attributed to the selecting universe
+            algorithm.AddSecuritySubscription(security.Symbol, Resolution.Hour);
+
+            var configs = algorithm.SubscriptionManager.SubscriptionDataConfigService.GetSubscriptionDataConfigs(security.Symbol, includeInternalConfigs: true);
+            Assert.IsTrue(configs.Any(c => c.Resolution == Resolution.Hour));
+
+            // remove the member
+            securityChanges = algorithm.DataManager.UniverseSelection.ApplyUniverseSelection(
+                universe,
+                algorithm.EndDate.ConvertToUtc(algorithm.TimeZone),
+                new BaseDataCollection(
+                    algorithm.UtcTime,
+                    Symbol.Create("CPRT", SecurityType.Equity, Market.USA),
+                    new List<BaseData>()
+                )
+            );
+
+            Assert.AreEqual(1, securityChanges.RemovedSecurities.Count);
+
+            configs = algorithm.SubscriptionManager.SubscriptionDataConfigService.GetSubscriptionDataConfigs(security.Symbol, includeInternalConfigs: true);
+            Assert.IsEmpty(configs);
+        }
+
+        [Test]
         public void CoarseFundamentalHasFundamentalDataFalseExcludedInFineUniverseSelection()
         {
             var algorithm = new AlgorithmStub(new MockDataFeed());

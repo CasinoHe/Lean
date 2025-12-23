@@ -22,6 +22,7 @@ using QuantConnect.Algorithm.Selection;
 using QuantConnect.Data;
 using QuantConnect.Data.Fundamental;
 using QuantConnect.Data.UniverseSelection;
+using QuantConnect.Interfaces;
 using QuantConnect.Scheduling;
 using QuantConnect.Securities;
 using QuantConnect.Util;
@@ -58,6 +59,81 @@ namespace QuantConnect.Algorithm
         {
             get;
             private set;
+        }
+
+        /// <summary>
+        /// Adds an additional data subscription for an existing security without pinning the security into a
+        /// <see cref="UserDefinedUniverse"/>. The subscription request is attributed to one of the universes
+        /// currently selecting the security, so it will be removed when that universe removes the security.
+        /// </summary>
+        /// <param name="symbol">The symbol to add the subscription for (must already exist in <see cref="Securities"/>)</param>
+        /// <param name="resolution">The resolution of the subscription</param>
+        /// <param name="fillForward">If true, fill forward is enabled for the subscription</param>
+        /// <param name="extendedMarketHours">If true, extended market hours are enabled for the subscription</param>
+        /// <param name="isInternalFeed">If true, the subscription will not be sent to the algorithm via OnData</param>
+        /// <param name="dataNormalizationMode">Data normalization mode for the subscription</param>
+        /// <returns>The list of subscription configs created or retrieved for the request</returns>
+        [DocumentationAttribute(AddingData)]
+        public IReadOnlyList<SubscriptionDataConfig> AddSecuritySubscription(
+            Symbol symbol,
+            Resolution resolution,
+            bool fillForward = true,
+            bool extendedMarketHours = false,
+            bool isInternalFeed = false,
+            DataNormalizationMode dataNormalizationMode = DataNormalizationMode.Adjusted)
+        {
+            if (!Securities.TryGetValue(symbol, out var security))
+            {
+                throw new InvalidOperationException($"Please add the security before requesting additional subscriptions. Symbol: {symbol}");
+            }
+
+            var universes = UniverseManager
+                .Select(x => x.Value)
+                .Where(u => u.ContainsMember(symbol))
+                .OrderBy(u => u is UserDefinedUniverse ? 1 : 0)
+                .ThenBy(u => u.Configuration.Symbol.ID)
+                .ToList();
+
+            if (universes.Count == 0)
+            {
+                throw new InvalidOperationException($"Unable to find a universe selecting {symbol}. Please add the symbol via a universe before adding subscriptions.");
+            }
+
+            var requestManager = SubscriptionManager.SubscriptionDataConfigService as IAlgorithmDataFeedSubscriptionManager;
+            if (requestManager == null)
+            {
+                throw new InvalidOperationException($"The configured {nameof(ISubscriptionDataConfigService)} does not support adding data feed subscriptions.");
+            }
+
+            var endTimeUtc = LiveMode ? QuantConnect.Time.EndOfTime : EndDate.ConvertToUtc(TimeZone);
+            var startTimeUtc = GetLocked() ? UtcTime.AddTicks(1) : UtcTime;
+
+            var configs = SubscriptionManager.SubscriptionDataConfigService.Add(
+                symbol,
+                resolution,
+                fillForward,
+                extendedMarketHours,
+                isFilteredSubscription: true,
+                isInternalFeed: isInternalFeed,
+                isCustomData: false,
+                subscriptionDataTypes: null,
+                dataNormalizationMode: dataNormalizationMode);
+
+            foreach (var config in configs)
+            {
+                foreach (var universe in universes)
+                {
+                    requestManager.EnsureSubscription(new SubscriptionRequest(
+                        isUniverseSubscription: false,
+                        universe: universe,
+                        security: security,
+                        configuration: config,
+                        startTimeUtc: startTimeUtc,
+                        endTimeUtc: endTimeUtc));
+                }
+            }
+
+            return configs;
         }
 
         /// <summary>
