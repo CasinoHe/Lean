@@ -123,13 +123,36 @@ namespace QuantConnect.Algorithm
             {
                 foreach (var universe in universes)
                 {
-                    requestManager.EnsureSubscription(new SubscriptionRequest(
+                    var request = new SubscriptionRequest(
                         isUniverseSubscription: false,
                         universe: universe,
                         security: security,
                         configuration: config,
                         startTimeUtc: startTimeUtc,
-                        endTimeUtc: endTimeUtc));
+                        endTimeUtc: endTimeUtc);
+
+                    // Mirror UniverseSelection behavior: if the request has no tradable dates, remove the config and skip.
+                    // This prevents leaving orphan SubscriptionDataConfig entries that can't be served by the data feed.
+                    if (!request.TradableDaysInDataTimeZone.Any())
+                    {
+                        requestManager.RemoveSubscription(config, universe);
+                        if (QuantConnect.Logging.Log.DebuggingEnabled)
+                        {
+                            Debug($"AddSecuritySubscription(): Skipping subscription {config} because it has no tradable dates between {request.StartTimeUtc:u} and {request.EndTimeUtc:u}");
+                        }
+                        continue;
+                    }
+
+                    if (!requestManager.EnsureSubscription(request))
+                    {
+                        // EnsureSubscription() can fail (ex: no tradable days, no tradeable dates, data feed can't create the subscription).
+                        // Remove the request/config for this universe to avoid keeping unusable configs around.
+                        requestManager.RemoveSubscription(config, universe);
+                        if (QuantConnect.Logging.Log.DebuggingEnabled)
+                        {
+                            Debug($"AddSecuritySubscription(): Failed to add data feed subscription for {config}. It was removed for universe {universe.Configuration.Symbol}.");
+                        }
+                    }
                 }
             }
 
