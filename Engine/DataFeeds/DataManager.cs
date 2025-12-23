@@ -273,14 +273,6 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         /// <returns>True if the subscription was created and added successfully, false otherwise</returns>
         public bool AddSubscription(SubscriptionRequest request)
         {
-            if (request.Security != null
-                && request.Security.Symbol == request.Configuration.Symbol
-                && !request.Security.Subscriptions.Contains(request.Configuration))
-            {
-                // For now this is required for retro compatibility with usages of security.Subscriptions
-                request.Security.AddData(request.Configuration);
-            }
-
             lock (_subscriptionManagerSubscriptions)
             {
                 // guarantee the configuration is present in our config collection
@@ -297,7 +289,10 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                 if (!subscription.EndOfStream)
                 {
                     // duplicate subscription request
-                    subscription.AddSubscriptionRequest(request);
+                    if (subscription.AddSubscriptionRequest(request))
+                    {
+                        EnsureSecurityHasConfiguration(request);
+                    }
                     // only result true if the existing subscription is internal, we actually added something from the users perspective
                     return subscription.Configuration.IsInternalFeed;
                 }
@@ -322,6 +317,8 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                 return false;
             }
 
+            EnsureSecurityHasConfiguration(request);
+
             if (_liveMode)
             {
                 OnSubscriptionAdded(subscription);
@@ -345,7 +342,28 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         public bool EnsureSubscription(SubscriptionRequest request)
         {
             AddSubscription(request);
-            return DataFeedSubscriptions.Contains(request.Configuration);
+
+            if (!DataFeedSubscriptions.TryGetValue(request.Configuration, out var subscription))
+            {
+                return false;
+            }
+
+            // Universe is the identity of the subscription request. If the universe is null,
+            // we can only assert the subscription exists.
+            return request.Universe == null || subscription.SubscriptionRequests.Any(r => ReferenceEquals(r.Universe, request.Universe));
+        }
+
+        private static void EnsureSecurityHasConfiguration(SubscriptionRequest request)
+        {
+            if (request.Security == null
+                || request.Security.Symbol != request.Configuration.Symbol
+                || request.Security.Subscriptions.Contains(request.Configuration))
+            {
+                return;
+            }
+
+            // For now this is required for retro compatibility with usages of security.Subscriptions
+            request.Security.AddData(request.Configuration);
         }
 
         /// <summary>

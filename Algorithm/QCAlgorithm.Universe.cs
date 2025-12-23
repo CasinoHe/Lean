@@ -119,9 +119,49 @@ namespace QuantConnect.Algorithm
                 subscriptionDataTypes: null,
                 dataNormalizationMode: dataNormalizationMode);
 
+            var successfulConfigs = new List<SubscriptionDataConfig>(configs.Count);
+
             foreach (var config in configs)
             {
-                foreach (var universe in universes)
+                var firstUniverse = universes[0];
+                var firstRequest = new SubscriptionRequest(
+                    isUniverseSubscription: false,
+                    universe: firstUniverse,
+                    security: security,
+                    configuration: config,
+                    startTimeUtc: startTimeUtc,
+                    endTimeUtc: endTimeUtc);
+
+                // Tradable days calculation is independent from universe; evaluate once per config.
+                var hasTradableDays = firstRequest.TradableDaysInDataTimeZone.Any();
+
+                if (!hasTradableDays)
+                {
+                    // Mirror UniverseSelection behavior: if there are no tradable dates, remove the config to avoid leaving it orphaned.
+                    // Note: DataManager.RemoveSubscription supports removing configs that were added but never created a data feed subscription,
+                    // as long as the universe parameter is provided.
+                    requestManager.RemoveSubscription(config, firstUniverse);
+                    if (QuantConnect.Logging.Log.DebuggingEnabled)
+                    {
+                        Debug($"AddSecuritySubscription(): Skipping subscription {config} because it has no tradable dates between {startTimeUtc:u} and {endTimeUtc:u}");
+                    }
+                    continue;
+                }
+
+                // Ensure subscription once, then attribute it to the remaining universes.
+                if (!requestManager.EnsureSubscription(firstRequest))
+                {
+                    requestManager.RemoveSubscription(config, firstUniverse);
+                    if (QuantConnect.Logging.Log.DebuggingEnabled)
+                    {
+                        Debug($"AddSecuritySubscription(): Failed to add data feed subscription for {config} (universe {firstUniverse.Configuration.Symbol}).");
+                    }
+                    continue;
+                }
+
+                successfulConfigs.Add(config);
+
+                foreach (var universe in universes.Skip(1))
                 {
                     var request = new SubscriptionRequest(
                         isUniverseSubscription: false,
@@ -131,32 +171,20 @@ namespace QuantConnect.Algorithm
                         startTimeUtc: startTimeUtc,
                         endTimeUtc: endTimeUtc);
 
-                    // Mirror UniverseSelection behavior: if the request has no tradable dates, remove the config and skip.
-                    // This prevents leaving orphan SubscriptionDataConfig entries that can't be served by the data feed.
-                    if (!request.TradableDaysInDataTimeZone.Any())
-                    {
-                        requestManager.RemoveSubscription(config, universe);
-                        if (QuantConnect.Logging.Log.DebuggingEnabled)
-                        {
-                            Debug($"AddSecuritySubscription(): Skipping subscription {config} because it has no tradable dates between {request.StartTimeUtc:u} and {request.EndTimeUtc:u}");
-                        }
-                        continue;
-                    }
-
                     if (!requestManager.EnsureSubscription(request))
                     {
-                        // EnsureSubscription() can fail (ex: no tradable days, no tradeable dates, data feed can't create the subscription).
-                        // Remove the request/config for this universe to avoid keeping unusable configs around.
+                        // If we failed to attribute this config to this universe, remove this universe's request/config reference.
+                        // The underlying subscription can still be kept alive by other universes.
                         requestManager.RemoveSubscription(config, universe);
                         if (QuantConnect.Logging.Log.DebuggingEnabled)
                         {
-                            Debug($"AddSecuritySubscription(): Failed to add data feed subscription for {config}. It was removed for universe {universe.Configuration.Symbol}.");
+                            Debug($"AddSecuritySubscription(): Failed to attribute data feed subscription for {config} to universe {universe.Configuration.Symbol}.");
                         }
                     }
                 }
             }
 
-            return configs;
+            return successfulConfigs;
         }
 
         /// <summary>
