@@ -31,7 +31,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
     /// <summary>
     /// DataManager will manage the subscriptions for both the DataFeeds and the SubscriptionManager
     /// </summary>
-    public class DataManager : IAlgorithmSubscriptionManager, IDataFeedSubscriptionManager, IDataManager
+    public class DataManager : IAlgorithmSubscriptionManager, IDataFeedSubscriptionManager, IDataManager, IAlgorithmDataFeedSubscriptionManager
     {
         private readonly IDataFeed _dataFeed;
         private readonly MarketHoursDatabase _marketHoursDatabase;
@@ -289,7 +289,10 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                 if (!subscription.EndOfStream)
                 {
                     // duplicate subscription request
-                    subscription.AddSubscriptionRequest(request);
+                    if (subscription.AddSubscriptionRequest(request))
+                    {
+                        EnsureSecurityHasConfiguration(request);
+                    }
                     // only result true if the existing subscription is internal, we actually added something from the users perspective
                     return subscription.Configuration.IsInternalFeed;
                 }
@@ -314,6 +317,8 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                 return false;
             }
 
+            EnsureSecurityHasConfiguration(request);
+
             if (_liveMode)
             {
                 OnSubscriptionAdded(subscription);
@@ -329,6 +334,36 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             }
 
             return DataFeedSubscriptions.TryAdd(subscription);
+        }
+
+        /// <summary>
+        /// Ensures the requested subscription exists in the data feed.
+        /// </summary>
+        public bool EnsureSubscription(SubscriptionRequest request)
+        {
+            AddSubscription(request);
+
+            if (!DataFeedSubscriptions.TryGetValue(request.Configuration, out var subscription))
+            {
+                return false;
+            }
+
+            // Universe is the identity of the subscription request. If the universe is null,
+            // we can only assert the subscription exists.
+            return request.Universe == null || subscription.SubscriptionRequests.Any(r => ReferenceEquals(r.Universe, request.Universe));
+        }
+
+        private static void EnsureSecurityHasConfiguration(SubscriptionRequest request)
+        {
+            if (request.Security == null
+                || request.Security.Symbol != request.Configuration.Symbol
+                || request.Security.Subscriptions.Contains(request.Configuration))
+            {
+                return;
+            }
+
+            // For now this is required for retro compatibility with usages of security.Subscriptions
+            request.Security.AddData(request.Configuration);
         }
 
         /// <summary>
