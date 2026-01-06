@@ -27,7 +27,7 @@ namespace QuantConnect.Lean.Engine.HistoricalData
     /// Provides an implementation of <see cref="IHistoryProvider"/> that relies on
     /// a brokerage connection to retrieve historical data
     /// </summary>
-    public class BrokerageHistoryProvider : SynchronizingHistoryProvider
+    public class BrokerageHistoryProvider : SynchronizingHistoryProvider, IBrokerageHistoryProvider
     {
         private IDataPermissionManager _dataPermissionManager;
         private IBrokerage _brokerage;

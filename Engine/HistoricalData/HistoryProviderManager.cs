@@ -109,10 +109,7 @@ namespace QuantConnect.Lean.Engine.HistoricalData
                 else
                 {
                     historyProvider = Composer.Instance.GetExportedValueByTypeName<IHistoryProvider>(historyProviderName);
-                    if (historyProvider is BrokerageHistoryProvider)
-                    {
-                        (historyProvider as BrokerageHistoryProvider).SetBrokerage(_brokerage);
-                    }
+                    (historyProvider as IBrokerageHistoryProvider)?.SetBrokerage(_brokerage);
                 }
                 historyProvider.Initialize(parameters);
                 historyProvider.InvalidConfigurationDetected += (sender, args) => { OnInvalidConfigurationDetected(args); };
