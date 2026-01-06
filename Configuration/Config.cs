@@ -103,7 +103,10 @@ namespace QuantConnect.Configuration
                 };
             }
 
-            return JObject.Parse(File.ReadAllText(ConfigurationFileName));
+            return JObject.Parse(
+                File.ReadAllText(ConfigurationFileName),
+                new JsonLoadSettings { CommentHandling = CommentHandling.Ignore }
+            );
         }
 
         /// <summary>
