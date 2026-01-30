@@ -106,7 +106,9 @@ namespace QuantConnect.Algorithm
             }
 
             var endTimeUtc = LiveMode ? QuantConnect.Time.EndOfTime : EndDate.ConvertToUtc(TimeZone);
-            var startTimeUtc = GetLocked() ? UtcTime.AddTicks(1) : UtcTime;
+            var startTimeUtc = LiveMode
+                ? (GetLocked() ? UtcTime.AddTicks(1) : UtcTime)
+                : StartDate.ConvertToUtc(TimeZone);
 
             var configs = SubscriptionManager.SubscriptionDataConfigService.Add(
                 symbol,
