@@ -174,6 +174,47 @@ namespace QuantConnect.Tests.Engine.DataFeeds
         }
 
         [Test]
+        public void AdditionalUniverseAttributedSubscriptionHonorsExplicitStartTime()
+        {
+            SymbolCache.Clear();
+            var algorithm = new AlgorithmStub(new MockDataFeedWithSubscription());
+            var orderProcessorMock = new Mock<IOrderProcessor>();
+            orderProcessorMock.Setup(m => m.GetOpenOrders(It.IsAny<Func<Order, bool>>())).Returns(new List<Order>());
+            algorithm.Transactions.SetOrderProcessor(orderProcessorMock.Object);
+
+            algorithm.SetStartDate(2012, 3, 27);
+            algorithm.SetEndDate(2012, 3, 30);
+            algorithm.AddUniverse("my-custom-universe", dt => dt.Day < 30 ? new List<string> { "CPRT" } : Enumerable.Empty<string>());
+            algorithm.OnEndOfTimeStep();
+            var universe = algorithm.UniverseManager.Values.First();
+
+            var securityChanges = algorithm.DataManager.UniverseSelection.ApplyUniverseSelection(
+                universe,
+                algorithm.EndDate.ConvertToUtc(algorithm.TimeZone).Subtract(TimeSpan.FromDays(2)),
+                new BaseDataCollection(
+                    algorithm.UtcTime,
+                    Symbol.Create("CPRT", SecurityType.Equity, Market.USA),
+                    new List<BaseData>()
+                )
+            );
+            var security = securityChanges.AddedSecurities.Single();
+            algorithm.Securities.Add(security);
+
+            var requestedStartTimeUtc = new DateTime(2012, 3, 29, 15, 0, 0, DateTimeKind.Utc);
+            algorithm.AddSecuritySubscription(
+                security.Symbol,
+                Resolution.Hour,
+                startTimeUtc: requestedStartTimeUtc);
+
+            var config = algorithm.SubscriptionManager.SubscriptionDataConfigService
+                .GetSubscriptionDataConfigs(security.Symbol, includeInternalConfigs: true)
+                .Single(c => c.Resolution == Resolution.Hour);
+
+            Assert.IsTrue(algorithm.DataManager.DataFeedSubscriptions.TryGetValue(config, out var subscription));
+            Assert.AreEqual(requestedStartTimeUtc, subscription.UtcStartTime);
+        }
+
+        [Test]
         public void CoarseFundamentalHasFundamentalDataFalseExcludedInFineUniverseSelection()
         {
             var algorithm = new AlgorithmStub(new MockDataFeed());

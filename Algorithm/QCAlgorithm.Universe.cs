@@ -72,6 +72,7 @@ namespace QuantConnect.Algorithm
         /// <param name="extendedMarketHours">If true, extended market hours are enabled for the subscription</param>
         /// <param name="isInternalFeed">If true, the subscription will not be sent to the algorithm via OnData</param>
         /// <param name="dataNormalizationMode">Data normalization mode for the subscription</param>
+        /// <param name="startTimeUtc">Optional UTC start time override for this subscription request</param>
         /// <returns>The list of subscription configs created or retrieved for the request</returns>
         [DocumentationAttribute(AddingData)]
         public IReadOnlyList<SubscriptionDataConfig> AddSecuritySubscription(
@@ -80,7 +81,8 @@ namespace QuantConnect.Algorithm
             bool fillForward = true,
             bool extendedMarketHours = false,
             bool isInternalFeed = false,
-            DataNormalizationMode dataNormalizationMode = DataNormalizationMode.Adjusted)
+            DataNormalizationMode dataNormalizationMode = DataNormalizationMode.Adjusted,
+            DateTime? startTimeUtc = null)
         {
             if (!Securities.TryGetValue(symbol, out var security))
             {
@@ -106,9 +108,30 @@ namespace QuantConnect.Algorithm
             }
 
             var endTimeUtc = LiveMode ? QuantConnect.Time.EndOfTime : EndDate.ConvertToUtc(TimeZone);
-            var startTimeUtc = LiveMode
+            var defaultStartTimeUtc = LiveMode
                 ? (GetLocked() ? UtcTime.AddTicks(1) : UtcTime)
                 : StartDate.ConvertToUtc(TimeZone);
+            var effectiveStartTimeUtc = startTimeUtc ?? defaultStartTimeUtc;
+
+            if (!LiveMode)
+            {
+                var backtestStartTimeUtc = StartDate.ConvertToUtc(TimeZone);
+                var backtestEndTimeUtc = EndDate.ConvertToUtc(TimeZone);
+
+                if (effectiveStartTimeUtc < backtestStartTimeUtc)
+                {
+                    effectiveStartTimeUtc = backtestStartTimeUtc;
+                }
+                if (effectiveStartTimeUtc > backtestEndTimeUtc)
+                {
+                    effectiveStartTimeUtc = backtestEndTimeUtc;
+                }
+            }
+
+            if (effectiveStartTimeUtc > endTimeUtc)
+            {
+                effectiveStartTimeUtc = endTimeUtc;
+            }
 
             var configs = SubscriptionManager.SubscriptionDataConfigService.Add(
                 symbol,
@@ -131,7 +154,7 @@ namespace QuantConnect.Algorithm
                     universe: firstUniverse,
                     security: security,
                     configuration: config,
-                    startTimeUtc: startTimeUtc,
+                    startTimeUtc: effectiveStartTimeUtc,
                     endTimeUtc: endTimeUtc);
 
                 // Tradable days calculation is independent from universe; evaluate once per config.
@@ -145,7 +168,7 @@ namespace QuantConnect.Algorithm
                     requestManager.RemoveSubscription(config, firstUniverse);
                     if (QuantConnect.Logging.Log.DebuggingEnabled)
                     {
-                        Debug($"AddSecuritySubscription(): Skipping subscription {config} because it has no tradable dates between {startTimeUtc:u} and {endTimeUtc:u}");
+                        Debug($"AddSecuritySubscription(): Skipping subscription {config} because it has no tradable dates between {effectiveStartTimeUtc:u} and {endTimeUtc:u}");
                     }
                     continue;
                 }
@@ -170,7 +193,7 @@ namespace QuantConnect.Algorithm
                         universe: universe,
                         security: security,
                         configuration: config,
-                        startTimeUtc: startTimeUtc,
+                        startTimeUtc: effectiveStartTimeUtc,
                         endTimeUtc: endTimeUtc);
 
                     if (!requestManager.EnsureSubscription(request))
