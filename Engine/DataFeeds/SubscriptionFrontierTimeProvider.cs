@@ -59,17 +59,25 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             long earlyBirdTicks = MaxDateTimeTicks;
             foreach (var subscription in _subscriptionManager.DataFeedSubscriptions)
             {
-                // this if should just be 'subscription.Current == null' but its affected by GH issue 3914
-                if (// this is a data subscription we just added
-                    // lets move it next to find the initial emit time
-                    subscription.Current == null
-                    && !subscription.IsUniverseSelectionSubscription
-                    && subscription.UtcStartTime == _utcNow
-                    ||
+                if (subscription.Current == null && !subscription.IsUniverseSelectionSubscription)
+                {
+                    // If the subscription start time is in the future, let it contribute to the frontier.
+                    // This prevents the frontier from being anchored by coarser subscriptions (for example, hourly)
+                    // and then ingesting all intraday data in a single catch-up slice.
+                    if (subscription.UtcStartTime > _utcNow)
+                    {
+                        earlyBirdTicks = Math.Min(earlyBirdTicks, subscription.UtcStartTime.Ticks);
+                    }
+                    // this if should just be 'subscription.Current == null' but its affected by GH issue 3914
+                    // for non-universe subscriptions we only prime when the start time has been reached
+                    else
+                    {
+                        subscription.MoveNext();
+                    }
+                }
+                else if (subscription.Current == null
                     // UserDefinedUniverse, through the AddData calls
-                    // will add new universe selection data points when is has too
-                    // so lets move it next to check if there is any
-                    subscription.Current == null
+                    // will add new universe selection data points when it has to
                     && subscription.IsUniverseSelectionSubscription)
                 {
                     subscription.MoveNext();
