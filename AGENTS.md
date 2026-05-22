@@ -19,7 +19,8 @@ This file applies inside `Lean/`. Read `../Docs/fork-notes.md` for the detailed 
 ## Config-Sensitive Behavior
 
 - `disable-equity-quotes` can remove default equity quote subscriptions.
-- `neutralize-splits` can force split factors to `1.0` during factor-file parsing.
+- Raw-price data workflows read factor-file split factors normally by default; `neutralize-splits` is not a required backtest or live setting for them.
+- Setting `neutralize-splits` to `true` explicitly forces split factors to `1.0` during factor-file parsing.
 - JSON config files may contain comments because config parsing was relaxed to allow them.
 - `ib-client-id` is part of the Lean-side IBKR configuration surface.
 
