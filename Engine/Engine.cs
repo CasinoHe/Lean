@@ -26,6 +26,7 @@ using QuantConnect.Configuration;
 using QuantConnect.Data;
 using QuantConnect.Data.Auxiliary;
 using QuantConnect.Exceptions;
+using QuantConnect.Indicators;
 using QuantConnect.Interfaces;
 using QuantConnect.Lean.Engine.DataFeeds;
 using QuantConnect.Lean.Engine.HistoricalData;
@@ -90,8 +91,12 @@ namespace QuantConnect.Lean.Engine
 
             try
             {
+                // Initialize Logger
+                Log.Initialize(job.UserId, job.ProjectId, job.AlgorithmId);
+
+                Messages.SetAlgorithmLanguage(job.Language);
                 Log.Trace($"Engine.Run(): Resource limits '{job.Controls.CpuAllocation}' CPUs. {job.Controls.RamAllocation} MB RAM.");
-                TextSubscriptionDataSourceReader.SetCacheSize((int) (job.RamAllocation * 0.4));
+                TextSubscriptionDataSourceReader.SetCacheSize((int)(job.RamAllocation * 0.4));
 
                 //Reset thread holders.
                 var initializeComplete = false;
@@ -100,7 +105,7 @@ namespace QuantConnect.Lean.Engine
                 SystemHandlers.Notify.SetAuthentication(job);
 
                 //-> Set the result handler type for this algorithm job, and launch the associated result thread.
-                AlgorithmHandlers.Results.Initialize(new (job, SystemHandlers.Notify, SystemHandlers.Api, AlgorithmHandlers.Transactions, AlgorithmHandlers.MapFileProvider));
+                AlgorithmHandlers.Results.Initialize(new(job, SystemHandlers.Notify, SystemHandlers.Api, AlgorithmHandlers.Transactions, AlgorithmHandlers.MapFileProvider));
 
                 IBrokerage brokerage = null;
                 DataManager dataManager = null;
@@ -151,7 +156,8 @@ namespace QuantConnect.Lean.Engine
                         registeredTypesProvider,
                         new SecurityCacheProvider(algorithm.Portfolio),
                         mapFilePrimaryExchangeProvider,
-                        algorithm);
+                        algorithm,
+                        new IndicatorBasedOptionPriceModelProvider(algorithm.Securities));
 
                     algorithm.Securities.SetSecurityService(securityService);
 
@@ -184,7 +190,7 @@ namespace QuantConnect.Lean.Engine
                         AlgorithmHandlers.FactorFileProvider,
                         AlgorithmHandlers.DataProvider,
                         dataManager,
-                        (IDataFeedTimeProvider) synchronizer,
+                        (IDataFeedTimeProvider)synchronizer,
                         AlgorithmHandlers.DataPermissionsManager.DataChannelProvider);
 
                     // set the history provider before setting up the algorithm
@@ -357,7 +363,7 @@ namespace QuantConnect.Lean.Engine
                             }
 
                             Log.Trace("Engine.Run(): Exiting Algorithm Manager");
-                        }, job.Controls.RamAllocation, workerThread:workerThread, sleepIntervalMillis: algorithm.LiveMode ? 10000 : 1000);
+                        }, job.Controls.RamAllocation, workerThread: workerThread, sleepIntervalMillis: algorithm.LiveMode ? 10000 : 1000);
 
                         if (!complete)
                         {
@@ -394,7 +400,7 @@ namespace QuantConnect.Lean.Engine
                             //Diagnostics Completed, Send Result Packet:
                             var totalSeconds = (DateTime.UtcNow - startTime).TotalSeconds;
                             var dataPoints = algorithmManager.DataPoints + algorithm.HistoryProvider.DataPointCount;
-                            var kps = dataPoints / (double) 1000 / totalSeconds;
+                            var kps = dataPoints / (double)1000 / totalSeconds;
                             AlgorithmHandlers.Results.DebugMessage($"Algorithm Id:({job.AlgorithmId}) completed in {totalSeconds:F2} seconds at {kps:F0}k data points per second. Processing total of {dataPoints:N0} data points.");
                         }
                     }
@@ -424,7 +430,7 @@ namespace QuantConnect.Lean.Engine
                     || (AlgorithmHandlers.Transactions != null && AlgorithmHandlers.Transactions.IsActive)
                     || (AlgorithmHandlers.DataFeed != null && AlgorithmHandlers.DataFeed.IsActive)
                     || (AlgorithmHandlers.RealTime != null && AlgorithmHandlers.RealTime.IsActive))
-                    && millisecondTotalWait < 30*1000)
+                    && millisecondTotalWait < 30 * 1000)
                 {
                     Thread.Sleep(millisecondInterval);
                     if (millisecondTotalWait % (millisecondInterval * 10) == 0)

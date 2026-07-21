@@ -41,10 +41,16 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         private readonly IRegisteredSecurityDataTypesProvider _registeredTypesProvider;
         private readonly IDataPermissionManager _dataPermissionManager;
         private List<SubscriptionDataConfig> _subscriptionDataConfigsEnumerator;
+        private readonly IAlgorithm _algorithm;
+
+        private bool _unsupportedUniverseSettingsResolutionWarningSent;
 
         /// There is no ConcurrentHashSet collection in .NET,
         /// so we use ConcurrentDictionary with byte value to minimize memory usage
         private readonly Dictionary<SubscriptionDataConfig, SubscriptionDataConfig> _subscriptionManagerSubscriptions = new();
+
+        /// Universe subscription requests that collided with a subscription pending removal, to be re-issued once it is removed
+        private readonly Dictionary<SubscriptionDataConfig, SubscriptionRequest> _pendingUniverseSubscriptionRequests = new();
 
         /// <summary>
         /// Event fired when a new subscription is added
@@ -78,6 +84,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             _liveMode = liveMode;
             _registeredTypesProvider = registeredTypesProvider;
             _dataPermissionManager = dataPermissionManager;
+            _algorithm = algorithm;
 
             // wire ourselves up to receive notifications when universes are added/removed
             algorithm.UniverseManager.CollectionChanged += (sender, args) =>
@@ -251,6 +258,12 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         /// </summary>
         public void RemoveAllSubscriptions()
         {
+            // drop any parked universe subscription request, we don't want to re-issue them while tearing down
+            lock (_pendingUniverseSubscriptionRequests)
+            {
+                _pendingUniverseSubscriptionRequests.Clear();
+            }
+
             // remove each subscription from our collection
             foreach (var subscription in DataFeedSubscriptions)
             {
@@ -288,6 +301,21 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             {
                 if (!subscription.EndOfStream)
                 {
+                    if (request.IsUniverseSubscription
+                        && subscription.IsUniverseSelectionSubscription
+                        && subscription.Universes.All(universe => universe.DisposeRequested))
+                    {
+                        // a universe was removed and a new one with the same configuration was added in the same
+                        // time step. The stale subscription will be removed by the synchronizer in the next loop,
+                        // after performing one last selection for its disposed universes, so we park the new
+                        // universe's request and will re-issue it once the stale subscription is actually removed
+                        lock (_pendingUniverseSubscriptionRequests)
+                        {
+                            _pendingUniverseSubscriptionRequests[request.Configuration] = request;
+                        }
+                        return true;
+                    }
+
                     // duplicate subscription request
                     if (subscription.AddSubscriptionRequest(request))
                     {
@@ -428,6 +456,21 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                         // this can be executed many times and its in the algorithm thread
                         Log.Debug($"DataManager.RemoveSubscription(): Removed {configuration}");
                     }
+
+                    // if a new universe with this same configuration was added while this subscription's removal was
+                    // pending, its subscription request was parked: the slot is now free, so we re-issue it.
+                    // We keep the request's original start time, which was already adjusted to the previous tradable
+                    // date when the universe was added, so that its first selection happens right away
+                    SubscriptionRequest pendingRequest;
+                    lock (_pendingUniverseSubscriptionRequests)
+                    {
+                        _pendingUniverseSubscriptionRequests.Remove(configuration, out pendingRequest);
+                    }
+                    if (pendingRequest != null && !pendingRequest.Universe.DisposeRequested)
+                    {
+                        AddSubscription(pendingRequest);
+                    }
+
                     return true;
                 }
             }
@@ -606,7 +649,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             )
         {
             var dataTypes = subscriptionDataTypes;
-            if(dataTypes == null)
+            if (dataTypes == null)
             {
                 if (symbol.SecurityType == SecurityType.Base && SecurityIdentifier.TryGetCustomDataTypeInstance(symbol.ID.Symbol, out var type))
                 {
@@ -615,7 +658,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                 }
                 else
                 {
-                    dataTypes = LookupSubscriptionConfigDataTypes(symbol.SecurityType, resolution ?? Resolution.Minute, symbol.IsCanonical());
+                    dataTypes = LookupSubscriptionConfigDataTypes(symbol.SecurityType, resolution ?? _algorithm.UniverseSettings.Resolution, symbol.IsCanonical());
                 }
             }
 
@@ -632,6 +675,25 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                 if (!resolutionWasProvided)
                 {
                     var defaultResolution = baseInstance.DefaultResolution();
+                    if (LeanData.IsCommonLeanDataType(typeTuple.Item1))
+                    {
+                        var res = _algorithm.UniverseSettings.Resolution;
+
+                        if (!_liveMode && !baseInstance.SupportedResolutions().Contains(res))
+                        {
+                            if (!_unsupportedUniverseSettingsResolutionWarningSent)
+                            {
+                                _algorithm.Log($"Warning: Resolution {_algorithm.UniverseSettings.Resolution} for {symbol} and type {typeTuple.Item1} is not supported. " +
+                                    $"The data type default resolution '{defaultResolution}' will be used instead");
+                                _unsupportedUniverseSettingsResolutionWarningSent = true;
+                            }
+                        }
+                        else
+                        {
+                            defaultResolution = res;
+                        }
+                    }
+
                     if (resolution.HasValue && resolution != defaultResolution)
                     {
                         // we are here because there are multiple 'dataTypes'.
@@ -649,14 +711,12 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                     if (!_liveMode)
                     {
                         var supportedResolutions = baseInstance.SupportedResolutions();
-                        if (supportedResolutions.Contains(resolution.Value))
+                        if (!supportedResolutions.Contains(resolution.Value))
                         {
-                            continue;
+                            throw new ArgumentException($"Sorry {resolution.ToStringInvariant()} is not a supported resolution for {typeTuple.Item1.Name}" +
+                                                        $" and SecurityType.{symbol.SecurityType.ToStringInvariant()}." +
+                                                        $" Please change your AddData to use one of the supported resolutions ({string.Join(",", supportedResolutions)}).");
                         }
-
-                        throw new ArgumentException($"Sorry {resolution.ToStringInvariant()} is not a supported resolution for {typeTuple.Item1.Name}" +
-                                                    $" and SecurityType.{symbol.SecurityType.ToStringInvariant()}." +
-                                                    $" Please change your AddData to use one of the supported resolutions ({string.Join(",", supportedResolutions)}).");
                     }
                 }
             }
@@ -682,24 +742,24 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             }
 
             var result = (from subscriptionDataType in dataTypes
-                let dataType = subscriptionDataType.Item1
-                let tickType = subscriptionDataType.Item2
-                select new SubscriptionDataConfig(
-                    dataType,
-                    symbol,
-                    resolution.Value,
-                    marketHoursDbEntry.DataTimeZone,
-                    exchangeHours.TimeZone,
-                    fillForward,
-                    extendedMarketHours,
-                    // if the subscription data types were not provided and the tick type is OpenInterest we make it internal
-                    subscriptionDataTypes == null && tickType == TickType.OpenInterest || isInternalFeed,
-                    isCustomData,
-                    isFilteredSubscription: isFilteredSubscription,
-                    tickType: tickType,
-                    dataNormalizationMode: dataNormalizationMode,
-                    dataMappingMode: dataMappingMode,
-                    contractDepthOffset: contractDepthOffset)).ToList();
+                          let dataType = subscriptionDataType.Item1
+                          let tickType = subscriptionDataType.Item2
+                          select new SubscriptionDataConfig(
+                              dataType,
+                              symbol,
+                              resolution.Value,
+                              marketHoursDbEntry.DataTimeZone,
+                              exchangeHours.TimeZone,
+                              fillForward,
+                              extendedMarketHours,
+                              // if the subscription data types were not provided and the tick type is OpenInterest we make it internal
+                              subscriptionDataTypes == null && tickType == TickType.OpenInterest || isInternalFeed,
+                              isCustomData,
+                              isFilteredSubscription: isFilteredSubscription,
+                              tickType: tickType,
+                              dataNormalizationMode: dataNormalizationMode,
+                              dataMappingMode: dataMappingMode,
+                              contractDepthOffset: contractDepthOffset)).ToList();
 
             for (int i = 0; i < result.Count; i++)
             {
@@ -742,7 +802,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             var result = availableDataType
                 .Select(tickType => new Tuple<Type, TickType>(LeanData.GetDataType(resolution, tickType), tickType)).ToList();
 
-            if(symbolSecurityType == SecurityType.CryptoFuture)
+            if (symbolSecurityType == SecurityType.CryptoFuture)
             {
                 result.Add(new Tuple<Type, TickType>(typeof(MarginInterestRate), TickType.Quote));
             }

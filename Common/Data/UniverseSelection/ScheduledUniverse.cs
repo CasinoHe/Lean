@@ -72,7 +72,12 @@ namespace QuantConnect.Data.UniverseSelection
         public ScheduledUniverse(DateTimeZone timeZone, IDateRule dateRule, ITimeRule timeRule, PyObject selector, UniverseSettings settings = null)
             : base(CreateConfiguration(timeZone, dateRule, timeRule))
         {
-            selector.TrySafeAs<Func<DateTime, object>>(out var func);
+            if (!selector.TrySafeAs<Func<DateTime, object>>(out var func))
+            {
+                throw new ArgumentException(
+                    $"Unable to create a scheduled universe selector from {selector.ToDisplayString()}: it is not a function. " +
+                    "Please provide a function that takes the firing date time and returns the selected symbols.");
+            }
             _dateRule = dateRule;
             _timeRule = timeRule;
             _selector = func.ConvertSelectionSymbolDelegate();
@@ -103,7 +108,8 @@ namespace QuantConnect.Data.UniverseSelection
         }
 
         /// <summary>
-        /// Get an enumerator of UTC DateTimes that defines when this universe will be invoked
+        /// Get an enumerator of UTC DateTimes that defines when this universe will be invoked,
+        /// only including times within [startTimeUtc, endTimeUtc], both bounds inclusive.
         /// </summary>
         /// <param name="startTimeUtc">The start time of the range in UTC</param>
         /// <param name="endTimeUtc">The end time of the range in UTC</param>
@@ -132,6 +138,11 @@ namespace QuantConnect.Data.UniverseSelection
             // Start yielding times
             do
             {
+                if (times.Current > endTimeUtc)
+                {
+                    times.Dispose();
+                    yield break;
+                }
                 yield return times.Current;
             }
             while (times.MoveNext());

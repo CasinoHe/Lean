@@ -19,6 +19,7 @@ using QuantConnect.Data;
 using QuantConnect.Securities;
 using QuantConnect.Data.Market;
 using QuantConnect.Data.Consolidators;
+using QuantConnect.Util;
 
 namespace Common.Data.Consolidators
 {
@@ -66,8 +67,10 @@ namespace Common.Data.Consolidators
         {
             if (!_initialized)
             {
-                workingBar.Time = data.Time.Date;
-                workingBar.Period = TimeSpan.FromDays(1);
+                if (workingBar.Time == DateTime.MaxValue || data.Time.Date > workingBar.Time.Date)
+                {
+                    workingBar.Time = data.Time.Date;
+                }
                 _initialized = true;
             }
 
@@ -98,7 +101,8 @@ namespace Common.Data.Consolidators
             {
                 return;
             }
-            if (currentLocalTime.Date != WorkingInstance?.Time.Date)
+
+            if (currentLocalTime.Date != WorkingInstance.Time.Date)
             {
                 Scan(currentLocalTime);
             }
@@ -133,9 +137,14 @@ namespace Common.Data.Consolidators
 
         private void InitializeWorkingBar()
         {
+            var time = DateTime.MaxValue;
+            if (Consolidated != null)
+            {
+                time = _exchangeHours.GetNextTradingDay(Consolidated.Time).Date;
+            }
             _workingBar = new SessionBar(_sourceTickType)
             {
-                Time = DateTime.MaxValue,
+                Time = time,
                 Symbol = _symbol
             };
             _initialized = false;

@@ -593,7 +593,7 @@ namespace QuantConnect.AlgorithmFactory.Python.Wrappers
         /// <param name="extendedMarketHours">Use extended market hours data</param>
         /// <param name="dataMappingMode">The contract mapping mode to use for the security</param>
         /// <param name="dataNormalizationMode">The price scaling mode to use for the security</param>
-        public Security AddSecurity(SecurityType securityType, string symbol, Resolution? resolution, string market, bool fillForward, decimal leverage, bool extendedMarketHours,
+        public Security AddSecurity(SecurityType securityType, string symbol, Resolution? resolution, string market, bool? fillForward, decimal leverage, bool? extendedMarketHours,
             DataMappingMode? dataMappingMode = null, DataNormalizationMode? dataNormalizationMode = null)
             => _baseAlgorithm.AddSecurity(securityType, symbol, resolution, market, fillForward, leverage, extendedMarketHours, dataMappingMode, dataNormalizationMode);
 
@@ -611,7 +611,7 @@ namespace QuantConnect.AlgorithmFactory.Python.Wrappers
         /// <param name="contractDepthOffset">The continuous contract desired offset from the current front month.
         /// For example, 0 (default) will use the front month, 1 will use the back month contract</param>
         /// <returns>The new Security that was added to the algorithm</returns>
-        public Security AddSecurity(Symbol symbol, Resolution? resolution = null, bool fillForward = true, decimal leverage = Security.NullLeverage, bool extendedMarketHours = false,
+        public Security AddSecurity(Symbol symbol, Resolution? resolution = null, bool? fillForward = null, decimal leverage = Security.NullLeverage, bool? extendedMarketHours = null,
             DataMappingMode? dataMappingMode = null, DataNormalizationMode? dataNormalizationMode = null, int contractDepthOffset = 0)
             => _baseAlgorithm.AddSecurity(symbol, resolution, fillForward, leverage, extendedMarketHours, dataMappingMode, dataNormalizationMode, contractDepthOffset);
 
@@ -901,7 +901,7 @@ namespace QuantConnect.AlgorithmFactory.Python.Wrappers
                     // If the method does not return or returns a non-iterable PyObject, throw an exception
                     if (result == null || !result.IsIterable())
                     {
-                        throw new Exception("OnMarginCall must return a non-empty list of SubmitOrderRequest");
+                        throw new Exception(Messages.AlgorithmPythonWrapper.OnMarginCallMustReturnNonEmptyList());
                     }
 
                     requests.Clear();
@@ -919,7 +919,7 @@ namespace QuantConnect.AlgorithmFactory.Python.Wrappers
                     // If the PyObject is an empty list or its items are not SubmitOrderRequest objects, throw an exception
                     if (requests.Count == 0)
                     {
-                        throw new Exception("OnMarginCall must return a non-empty list of SubmitOrderRequest");
+                        throw new Exception(Messages.AlgorithmPythonWrapper.OnMarginCallMustReturnNonEmptyList());
                     }
                 }
             }
@@ -1296,6 +1296,11 @@ namespace QuantConnect.AlgorithmFactory.Python.Wrappers
         /// <param name="command">The callback command instance</param>
         /// <returns>The command result</returns>
         public CommandResultPacket RunCommand(CallbackCommand command) => _baseAlgorithm.RunCommand(command);
+
+        /// <summary>
+        /// Gets the default order properties
+        /// </summary>
+        public IOrderProperties DefaultOrderProperties => _baseAlgorithm.DefaultOrderProperties;
 
         /// <summary>
         /// Dispose of this instance

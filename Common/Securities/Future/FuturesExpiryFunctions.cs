@@ -543,6 +543,31 @@ namespace QuantConnect.Securities.Future
                     return expiryDate.Add(new TimeSpan(13, 0, 0));
                 })
             },
+            // VIX Mini Futures (VXM): https://cdn.cboe.com/resources/futures/VXM_Contract_Specifications.pdf
+            {Symbol.Create(Futures.Indices.VIXMini, SecurityType.Future, Market.CFE), (time =>
+                {
+                    // Trading occurs 30 days before S&P 500 option expiration (third Friday of contract month).
+                    // Last trading day is the Wednesday 30 days prior to the third Friday of the contract month.
+                    var market = Market.CFE;
+                    var symbol = Futures.Indices.VIXMini;
+                    var nextThirdFriday = FuturesExpiryUtilityFunctions.ThirdFriday(time.AddMonths(1));
+                    var expiryDate = nextThirdFriday.AddDays(-30);
+                    var holidays = FuturesExpiryUtilityFunctions.GetExpirationHolidays(market, symbol);
+
+                    // If the reference 3rd Friday is a holiday, shift expiry back one day per spec.
+                    if (holidays.Contains(nextThirdFriday))
+                    {
+                        expiryDate = expiryDate.AddDays(-1);
+                    }
+                    // Ensure the computed expiry date is itself a valid tradable day.
+                    while (holidays.Contains(expiryDate) || !expiryDate.IsCommonBusinessDay())
+                    {
+                        expiryDate = expiryDate.AddDays(-1);
+                    }
+                    // Trading hours for expiring VXM futures contracts end at 8:00 a.m. Chicago time on the final settlement date.
+                    return expiryDate.Add(new TimeSpan(13, 0, 0));
+                })
+            },
             // Bloomberg Commodity Index (AW): https://www.cmegroup.com/trading/agricultural/commodity-index/bloomberg-commodity-index_contract_specifications.html
             {Symbol.Create(Futures.Indices.BloombergCommodityIndex, SecurityType.Future, Market.CBOT), (time =>
                 {
@@ -765,6 +790,31 @@ namespace QuantConnect.Securities.Future
                     var priorBusinessDay = FuturesExpiryUtilityFunctions.AddBusinessDays(lastBusinessDay, -1, holidays);
 
                     return priorBusinessDay.Add(new TimeSpan(16, 0, 0));
+                })
+            },
+
+            // KOSPI 200 Index Futures (KM): http://global.krx.co.kr/contents/GLB/05/0503/0503010102/GLB0503010102.jsp
+            {Symbol.Create(Futures.Indices.Kospi200, SecurityType.Future, Market.KRX), (time =>
+                {
+                    // Listed contracts: four quarterly months (March, June, September, December) + two half-yearly months (June, December)
+                    // + one yearly month (December), all within the quarterly cycle
+                    while (!FutureExpirationCycles.HMUZ.Contains(time.Month))
+                    {
+                        time = time.AddMonths(1);
+                    }
+
+                    // Last trading day: the second Thursday of the contract month. Trading terminates at 15:20 KST on that day.
+                    // If the second Thursday is a holiday, the last trading day is the preceding business day.
+                    var market = Market.KRX;
+                    var symbol = Futures.Indices.Kospi200;
+                    var holidays = FuturesExpiryUtilityFunctions.GetExpirationHolidays(market, symbol);
+
+                    var lastTradingDay = FuturesExpiryUtilityFunctions.NthWeekday(time, 2, DayOfWeek.Thursday);
+                    while (holidays.Contains(lastTradingDay) || !lastTradingDay.IsCommonBusinessDay())
+                    {
+                        lastTradingDay = lastTradingDay.AddDays(-1);
+                    }
+                    return lastTradingDay.Add(new TimeSpan(15, 20, 0));
                 })
             },
 

@@ -106,6 +106,8 @@ namespace QuantConnect.Algorithm
         private HashSet<string> _tags;
         private bool _tagsLimitReachedLogSent;
         private bool _tagsCollectionTruncatedLogSent;
+        private bool _hasShownDailyConsolidationWarning;
+        private bool _indexOptionTickerAsUnderlyingWarningSent;
         private DateTime _start;
         private DateTime _startDate;   //Default start and end dates.
         private DateTime _endDate;     //Default end to yesterday
@@ -1314,7 +1316,7 @@ namespace QuantConnect.Algorithm
         {
             if (_locked)
             {
-                throw new InvalidOperationException("Algorithm.SetTimeZone(): Cannot change time zone after algorithm running.");
+                throw new InvalidOperationException(Messages.QCAlgorithm.SetTimeZoneAlreadyRunning());
             }
 
             if (timeZone == null) throw new ArgumentNullException(nameof(timeZone));
@@ -1449,7 +1451,7 @@ namespace QuantConnect.Algorithm
         {
             if (_locked)
             {
-                throw new InvalidOperationException("Algorithm.SetBenchmark(): Cannot change Benchmark after algorithm initialized.");
+                throw new InvalidOperationException(Messages.QCAlgorithm.SetBenchmarkAlreadyInitialized());
             }
 
             var market = GetMarket(null, symbol, securityType, defaultMarket: Market.USA);
@@ -1502,7 +1504,7 @@ namespace QuantConnect.Algorithm
         {
             if (_locked)
             {
-                throw new InvalidOperationException("Algorithm.SetBenchmark(): Cannot change Benchmark after algorithm initialized.");
+                throw new InvalidOperationException(Messages.QCAlgorithm.SetBenchmarkAlreadyInitialized());
             }
 
             // Create our security benchmark
@@ -1521,7 +1523,7 @@ namespace QuantConnect.Algorithm
         {
             if (_locked)
             {
-                throw new InvalidOperationException("Algorithm.SetBenchmark(): Cannot change Benchmark after algorithm initialized.");
+                throw new InvalidOperationException(Messages.QCAlgorithm.SetBenchmarkAlreadyInitialized());
             }
 
             Benchmark = new FuncBenchmark(benchmark);
@@ -1598,8 +1600,7 @@ namespace QuantConnect.Algorithm
         {
             if (_locked)
             {
-                throw new InvalidOperationException("Algorithm.SetAccountCurrency(): " +
-                    "Cannot change AccountCurrency after algorithm initialized.");
+                throw new InvalidOperationException(Messages.QCAlgorithm.SetAccountCurrencyAlreadyInitialized());
             }
 
             if (startingCash == null)
@@ -1652,7 +1653,7 @@ namespace QuantConnect.Algorithm
             }
             else
             {
-                throw new InvalidOperationException("Algorithm.SetCash(): Cannot change cash available after algorithm initialized.");
+                throw new InvalidOperationException(Messages.QCAlgorithm.SetCashAlreadyInitialized());
             }
         }
 
@@ -1671,7 +1672,7 @@ namespace QuantConnect.Algorithm
             }
             else
             {
-                throw new InvalidOperationException("Algorithm.SetCash(): Cannot change cash available after algorithm initialized.");
+                throw new InvalidOperationException(Messages.QCAlgorithm.SetCashAlreadyInitialized());
             }
         }
 
@@ -1777,7 +1778,7 @@ namespace QuantConnect.Algorithm
             }
             else
             {
-                throw new InvalidOperationException("Algorithm.SetStartDate(): Cannot change start date after algorithm initialized.");
+                throw new InvalidOperationException(Messages.QCAlgorithm.SetStartDateAlreadyInitialized());
             }
         }
 
@@ -1796,7 +1797,7 @@ namespace QuantConnect.Algorithm
             //1. Check not locked already:
             if (_locked)
             {
-                throw new InvalidOperationException("Algorithm.SetEndDate(): Cannot change end date after algorithm initialized.");
+                throw new InvalidOperationException(Messages.QCAlgorithm.SetEndDateAlreadyInitialized());
             }
 
             //Validate:
@@ -1902,7 +1903,7 @@ namespace QuantConnect.Algorithm
         /// <param name="dataMappingMode">The contract mapping mode to use for the security</param>
         /// <param name="dataNormalizationMode">The price scaling mode to use for the security</param>
         [DocumentationAttribute(AddingData)]
-        public Security AddSecurity(SecurityType securityType, string ticker, Resolution? resolution = null, bool fillForward = true, bool extendedMarketHours = false,
+        public Security AddSecurity(SecurityType securityType, string ticker, Resolution? resolution = null, bool? fillForward = null, bool? extendedMarketHours = null,
             DataMappingMode? dataMappingMode = null, DataNormalizationMode? dataNormalizationMode = null)
         {
             return AddSecurity(securityType, ticker, resolution, fillForward, Security.NullLeverage, extendedMarketHours, dataMappingMode, dataNormalizationMode);
@@ -1921,7 +1922,7 @@ namespace QuantConnect.Algorithm
         /// <param name="dataNormalizationMode">The price scaling mode to use for the security</param>
         /// <remarks> AddSecurity(SecurityType securityType, Symbol symbol, Resolution resolution, bool fillForward, decimal leverage, bool extendedMarketHours)</remarks>
         [DocumentationAttribute(AddingData)]
-        public Security AddSecurity(SecurityType securityType, string ticker, Resolution? resolution, bool fillForward, decimal leverage, bool extendedMarketHours,
+        public Security AddSecurity(SecurityType securityType, string ticker, Resolution? resolution, bool? fillForward, decimal leverage, bool? extendedMarketHours,
             DataMappingMode? dataMappingMode = null, DataNormalizationMode? dataNormalizationMode = null)
         {
             return AddSecurity(securityType, ticker, resolution, null, fillForward, leverage, extendedMarketHours, dataMappingMode, dataNormalizationMode);
@@ -1940,7 +1941,7 @@ namespace QuantConnect.Algorithm
         /// <param name="dataMappingMode">The contract mapping mode to use for the security</param>
         /// <param name="dataNormalizationMode">The price scaling mode to use for the security</param>
         [DocumentationAttribute(AddingData)]
-        public Security AddSecurity(SecurityType securityType, string ticker, Resolution? resolution, string market, bool fillForward, decimal leverage, bool extendedMarketHours,
+        public Security AddSecurity(SecurityType securityType, string ticker, Resolution? resolution, string market, bool? fillForward, decimal leverage, bool? extendedMarketHours,
             DataMappingMode? dataMappingMode = null, DataNormalizationMode? dataNormalizationMode = null)
         {
             // if AddSecurity method is called to add an option or a future, we delegate a call to respective methods
@@ -1989,7 +1990,7 @@ namespace QuantConnect.Algorithm
         /// For example, 0 (default) will use the front month, 1 will use the back month contract</param>
         /// <returns>The new Security that was added to the algorithm</returns>
         [DocumentationAttribute(AddingData)]
-        public Security AddSecurity(Symbol symbol, Resolution? resolution = null, bool fillForward = true, decimal leverage = Security.NullLeverage, bool extendedMarketHours = false,
+        public Security AddSecurity(Symbol symbol, Resolution? resolution = null, bool? fillForward = null, decimal leverage = Security.NullLeverage, bool? extendedMarketHours = null,
             DataMappingMode? dataMappingMode = null, DataNormalizationMode? dataNormalizationMode = null, int contractDepthOffset = 0)
         {
             // allow users to specify negative numbers, we get the abs of it
@@ -2001,15 +2002,16 @@ namespace QuantConnect.Algorithm
             }
 
             var isCanonical = symbol.IsCanonical();
+            var securityFillForward = fillForward ??= UniverseSettings.FillForward;
+            extendedMarketHours ??= UniverseSettings.ExtendedMarketHours;
 
             // Short-circuit to AddOptionContract because it will add the underlying if required
             if (!isCanonical && symbol.SecurityType.IsOption())
             {
-                return AddOptionContract(symbol, resolution, fillForward, leverage, extendedMarketHours);
+                return AddOptionContract(symbol, resolution, securityFillForward, leverage, extendedMarketHours.Value);
             }
 
             var securityResolution = resolution;
-            var securityFillForward = fillForward;
             if (isCanonical)
             {
                 // canonical options and futures are daily only
@@ -2026,7 +2028,7 @@ namespace QuantConnect.Algorithm
                 configs = SubscriptionManager.SubscriptionDataConfigService.Add(symbol,
                     securityResolution,
                     securityFillForward,
-                    extendedMarketHours,
+                    extendedMarketHours.Value,
                     isFilteredSubscription,
                     dataNormalizationMode: dataNormalizationMode.Value,
                     contractDepthOffset: (uint)contractDepthOffset);
@@ -2036,7 +2038,7 @@ namespace QuantConnect.Algorithm
                 configs = SubscriptionManager.SubscriptionDataConfigService.Add(symbol,
                    securityResolution,
                    securityFillForward,
-                   extendedMarketHours,
+                   extendedMarketHours.Value,
                    isFilteredSubscription,
                    contractDepthOffset: (uint)contractDepthOffset);
             }
@@ -2054,7 +2056,7 @@ namespace QuantConnect.Algorithm
                 {
                     var canonicalConfig = configs.First();
                     var universeSettingsResolution = resolution ?? UniverseSettings.Resolution;
-                    var settings = new UniverseSettings(universeSettingsResolution, leverage, fillForward, extendedMarketHours, UniverseSettings.MinimumTimeInUniverse)
+                    var settings = new UniverseSettings(universeSettingsResolution, leverage, fillForward.Value, extendedMarketHours.Value, UniverseSettings.MinimumTimeInUniverse)
                     {
                         Asynchronous = UniverseSettings.Asynchronous
                     };
@@ -2070,7 +2072,8 @@ namespace QuantConnect.Algorithm
                             GetResolution(symbol, resolution, null), isCanonical: false);
                         var continuousUniverseSettings = new UniverseSettings(settings)
                         {
-                            ExtendedMarketHours = extendedMarketHours,
+                            ExtendedMarketHours = extendedMarketHours.Value,
+                            FillForward = fillForward.Value,
                             DataMappingMode = dataMappingMode ?? UniverseSettings.GetUniverseMappingModeOrDefault(symbol.SecurityType, symbol.ID.Market),
                             DataNormalizationMode = dataNormalizationMode ?? UniverseSettings.GetUniverseNormalizationModeOrDefault(symbol.SecurityType),
                             ContractDepthOffset = (int)contractOffset,
@@ -2130,7 +2133,7 @@ namespace QuantConnect.Algorithm
         /// <param name="leverage">The requested leverage for this equity. Default is set by <see cref="SecurityInitializer"/></param>
         /// <returns>The new <see cref="Option"/> security</returns>
         [DocumentationAttribute(AddingData)]
-        public Option AddOption(string underlying, Resolution? resolution = null, string market = null, bool fillForward = true, decimal leverage = Security.NullLeverage)
+        public Option AddOption(string underlying, Resolution? resolution = null, string market = null, bool? fillForward = null, decimal leverage = Security.NullLeverage)
         {
             market = GetMarket(market, underlying, SecurityType.Option);
 
@@ -2151,7 +2154,7 @@ namespace QuantConnect.Algorithm
         /// <returns>The new option security instance</returns>
         /// <exception cref="KeyNotFoundException"></exception>
         [DocumentationAttribute(AddingData)]
-        public Option AddOption(Symbol underlying, Resolution? resolution = null, string market = null, bool fillForward = true, decimal leverage = Security.NullLeverage)
+        public Option AddOption(Symbol underlying, Resolution? resolution = null, string market = null, bool? fillForward = null, decimal leverage = Security.NullLeverage)
         {
             return AddOption(underlying, null, resolution, market, fillForward, leverage);
         }
@@ -2171,7 +2174,7 @@ namespace QuantConnect.Algorithm
         /// <exception cref="KeyNotFoundException"></exception>
         [DocumentationAttribute(AddingData)]
         public Option AddOption(Symbol underlying, string targetOption, Resolution? resolution = null,
-            string market = null, bool fillForward = true, decimal leverage = Security.NullLeverage)
+            string market = null, bool? fillForward = null, decimal leverage = Security.NullLeverage)
         {
             var optionType = QuantConnect.Symbol.GetOptionTypeFromUnderlying(underlying);
 
@@ -2214,7 +2217,7 @@ namespace QuantConnect.Algorithm
         /// <returns>The new <see cref="Future"/> security</returns>
         [DocumentationAttribute(AddingData)]
         public Future AddFuture(string ticker, Resolution? resolution = null, string market = null,
-            bool fillForward = true, decimal leverage = Security.NullLeverage, bool extendedMarketHours = false,
+            bool? fillForward = null, decimal leverage = Security.NullLeverage, bool? extendedMarketHours = null,
             DataMappingMode? dataMappingMode = null, DataNormalizationMode? dataNormalizationMode = null, int contractDepthOffset = 0)
         {
             market = GetMarket(market, ticker, SecurityType.Future);
@@ -2282,7 +2285,7 @@ namespace QuantConnect.Algorithm
         /// <param name="leverage">The leverage to apply to the option contract</param>
         /// <param name="extendedMarketHours">Use extended market hours data</param>
         /// <returns>Option security</returns>
-        /// <exception cref="ArgumentException">Symbol is canonical (i.e. a generic Symbol returned from <see cref="AddFuture"/> or <see cref="AddOption(string, Resolution?, string, bool, decimal)"/>)</exception>
+        /// <exception cref="ArgumentException">Symbol is canonical (i.e. a generic Symbol returned from <see cref="AddFuture"/> or <see cref="AddOption(string, Resolution?, string, bool?, decimal)"/>)</exception>
         [DocumentationAttribute(AddingData)]
         public Option AddFutureOptionContract(Symbol symbol, Resolution? resolution = null, bool fillForward = true,
             decimal leverage = Security.NullLeverage, bool extendedMarketHours = false)
@@ -2307,7 +2310,24 @@ namespace QuantConnect.Algorithm
 
         public IndexOption AddIndexOption(string underlying, Resolution? resolution = null, string market = null, bool fillForward = true)
         {
-            return AddIndexOption(underlying, null, resolution, market, fillForward);
+            string targetOption = null;
+            // Some non-standard index options, like the weekly SPXW, are options on an index (SPX) but have their own ticker.
+            // If one of those option tickers is provided as the underlying, e.g. AddIndexOption("SPXW"), map it to the
+            // actual underlying index and use the provided ticker as the target option. Otherwise a data-less index security
+            // would be created and used as the underlying of the option contracts, which would never get a price
+            var underlyingTicker = IndexOptionSymbol.MapToUnderlying(underlying);
+            if (!underlyingTicker.Equals(underlying, StringComparison.InvariantCultureIgnoreCase))
+            {
+                if (!_indexOptionTickerAsUnderlyingWarningSent)
+                {
+                    _indexOptionTickerAsUnderlyingWarningSent = true;
+                    Debug($"Warning: '{underlying}' is an index option ticker, using index '{underlyingTicker}' as the underlying and '{underlying}' as the target option.");
+                }
+                targetOption = underlying;
+                underlying = underlyingTicker;
+            }
+
+            return AddIndexOption(underlying, targetOption, resolution, market, fillForward);
         }
 
         /// <summary>
@@ -3379,7 +3399,7 @@ namespace QuantConnect.Algorithm
         [DocumentationAttribute(SecuritiesAndPortfolio)]
         public Fundamental Fundamentals(Symbol symbol)
         {
-            return new Fundamental(Time, symbol) { EndTime = Time };
+            return Fundamental.ForDate(Time, symbol);
         }
 
         /// <summary>
@@ -3815,7 +3835,7 @@ namespace QuantConnect.Algorithm
 
         private string FormatLog(string message)
         {
-            return $"{Time.ToStringInvariant(DateFormat.UI)} {message}";
+            return message.PrefixWithAlgorithmTime(Time);
         }
     }
 }

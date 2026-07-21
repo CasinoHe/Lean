@@ -70,7 +70,7 @@ namespace QuantConnect
     /// </summary>
     public static class Extensions
     {
-        private static readonly Dictionary<string, bool> _emptyDirectories = new ();
+        private static readonly Dictionary<string, bool> _emptyDirectories = new();
         private static readonly HashSet<string> InvalidSecurityTypes = new HashSet<string>();
         private static readonly Regex DateCheck = new Regex(@"\d{8}", RegexOptions.Compiled);
         private static RecyclableMemoryStreamManager MemoryManager = new RecyclableMemoryStreamManager();
@@ -78,6 +78,18 @@ namespace QuantConnect
 
         private static readonly Dictionary<IntPtr, PythonActivator> PythonActivators
             = new Dictionary<IntPtr, PythonActivator>();
+
+        /// <summary>
+        /// Prefixes the given message with the provided algorithm time, producing the standard
+        /// timestamped format shared by algorithm logs and messages
+        /// </summary>
+        /// <param name="message">The message to prefix</param>
+        /// <param name="algorithmTime">The algorithm time to prefix the message with</param>
+        /// <returns>The message prefixed with the algorithm time</returns>
+        public static string PrefixWithAlgorithmTime(this string message, DateTime algorithmTime)
+        {
+            return $"{algorithmTime.ToStringInvariant(DateFormat.UI)} {message}";
+        }
 
         /// <summary>
         /// Maintains old behavior of NodaTime's (&lt; 2.0) daylight savings mapping.
@@ -174,7 +186,7 @@ namespace QuantConnect
         {
             lock (_emptyDirectories)
             {
-                if(!_emptyDirectories.TryGetValue(directoryPath, out var result))
+                if (!_emptyDirectories.TryGetValue(directoryPath, out var result))
                 {
                     // is empty unless it exists and it has at least 1 file or directory in it
                     result = true;
@@ -285,7 +297,73 @@ namespace QuantConnect
         /// <param name="headers">Add custom headers for the request</param>
         public static bool TryDownloadData(this HttpClient client, string url, out string data, out HttpStatusCode? statusCode, Dictionary<string, string> headers = null)
         {
-            data = null;
+            return client.TryDownloadData(url, out data, out statusCode, headers, null);
+        }
+
+        /// <summary>
+        /// Helper method to download a provided url as a string
+        /// </summary>
+        /// <param name="client">The http client to use</param>
+        /// <param name="url">The url to download data from</param>
+        /// <param name="headers">Add custom headers for the request</param>
+        public static string DownloadData(this HttpClient client, string url, Dictionary<string, string> headers = null)
+        {
+            return client.DownloadData<string>(url, headers, null);
+        }
+
+        /// <summary>
+        /// Helper method to download a provided url as a string
+        /// </summary>
+        /// <param name="url">The url to download data from</param>
+        /// <param name="headers">Add custom headers for the request</param>
+        public static string DownloadData(this string url, Dictionary<string, string> headers = null)
+        {
+            return url.DownloadData<string>(headers, null);
+        }
+
+        /// <summary>
+        /// Download the content of a url to a string and deserialize it to the specified type
+        /// </summary>
+        /// <typeparam name="T">The type to deserialize to</typeparam>
+        /// <param name="client">The http client to use</param>
+        /// <param name="url">The url to download data from</param>
+        /// <param name="headers">Add custom headers for the request</param>
+        /// <param name="settings">Optional JSON serializer settings</param>
+        /// <returns>The deserialized data</returns>
+        public static T DownloadData<T>(this HttpClient client, string url, Dictionary<string, string> headers = null, JsonSerializerSettings settings = null)
+        {
+            client.TryDownloadData<T>(url, out var result, out _, headers, settings);
+            return result;
+        }
+
+        /// <summary>
+        /// Download the content of a url to a string and deserialize it to the specified type
+        /// </summary>
+        /// <typeparam name="T">The type to deserialize to</typeparam>
+        /// <param name="url">The url to download data from</param>
+        /// <param name="headers">Add custom headers for the request</param>
+        /// <param name="settings">Optional JSON serializer settings</param>
+        /// <returns>The deserialized data</returns>
+        public static T DownloadData<T>(this string url, Dictionary<string, string> headers = null, JsonSerializerSettings settings = null)
+        {
+            using var client = new HttpClient();
+            return client.DownloadData<T>(url, headers, settings);
+        }
+
+        /// <summary>
+        /// Tries to download and deserialize directly from stream to T
+        /// </summary>
+        /// <typeparam name="T">The type to deserialize to</typeparam>
+        /// <param name="client">The http client to use</param>
+        /// <param name="url">The url to download data from</param>
+        /// <param name="result">The deserialized data if successful</param>
+        /// <param name="statusCode">The request status code</param>
+        /// <param name="headers">Add custom headers for the request</param>
+        /// <param name="settings">Optional JSON serializer settings</param>
+        /// <returns>True if successful, otherwise false</returns>
+        public static bool TryDownloadData<T>(this HttpClient client, string url, out T result, out HttpStatusCode? statusCode, Dictionary<string, string> headers = null, JsonSerializerSettings settings = null)
+        {
+            result = default;
             statusCode = null;
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             if (headers != null)
@@ -295,6 +373,7 @@ namespace QuantConnect
                     request.Headers.TryAddWithoutValidation(kvp.Key, kvp.Value);
                 }
             }
+
             try
             {
                 using var response = client.SendAsync(request).SynchronouslyAwaitTaskResult();
@@ -306,37 +385,27 @@ namespace QuantConnect
                     return false;
                 }
 
-                data = response.Content.ReadAsStringAsync().SynchronouslyAwaitTaskResult();
+                using var stream = response.Content.ReadAsStreamAsync().SynchronouslyAwaitTaskResult();
+                using var reader = new StreamReader(stream);
+
+                if (typeof(T) == typeof(string))
+                {
+                    // Special case: return the response as a raw string without deserialization
+                    result = (T)(object)reader.ReadToEnd();
+                }
+                else
+                {
+                    using var jsonReader = new JsonTextReader(reader);
+                    var serializer = JsonSerializer.Create(settings);
+                    result = serializer.Deserialize<T>(jsonReader);
+                }
                 return true;
             }
-            catch (WebException ex)
+            catch (HttpRequestException ex)
             {
                 Log.Error(ex, $"DownloadData(): {Messages.Extensions.DownloadDataFailed(url)}");
                 return false;
             }
-        }
-
-        /// <summary>
-        /// Helper method to download a provided url as a string
-        /// </summary>
-        /// <param name="client">The http client to use</param>
-        /// <param name="url">The url to download data from</param>
-        /// <param name="headers">Add custom headers for the request</param>
-        public static string DownloadData(this HttpClient client, string url, Dictionary<string, string> headers = null)
-        {
-            client.TryDownloadData(url, out var data, out _, headers);
-            return data;
-        }
-
-        /// <summary>
-        /// Helper method to download a provided url as a string
-        /// </summary>
-        /// <param name="url">The url to download data from</param>
-        /// <param name="headers">Add custom headers for the request</param>
-        public static string DownloadData(this string url, Dictionary<string, string> headers = null)
-        {
-            using var client = new HttpClient();
-            return client.DownloadData(url, headers);
         }
 
         /// <summary>
@@ -841,7 +910,8 @@ namespace QuantConnect
                             && (targetIsDelta ? Math.Abs(x.TargetQuantity) : Math.Abs(x.TargetQuantity - x.ExistingQuantity))
                             >= x.Security.SymbolProperties.LotSize
                 )
-                .Select(x => new {
+                .Select(x => new
+                {
                     x.PortfolioTarget,
                     OrderValue = Math.Abs((targetIsDelta ? x.TargetQuantity : (x.TargetQuantity - x.ExistingQuantity)) * x.Security.Price),
                     IsReducingPosition = x.ExistingQuantity != 0
@@ -867,7 +937,7 @@ namespace QuantConnect
             }
 
             var instance = objectActivator.Invoke(new object[] { type });
-            if(instance == null)
+            if (instance == null)
             {
                 // shouldn't happen but just in case...
                 throw new ArgumentException(Messages.Extensions.FailedToCreateInstanceOfType(type));
@@ -1007,7 +1077,8 @@ namespace QuantConnect
         public static void Clear<T>(this ConcurrentQueue<T> queue)
         {
             T item;
-            while (queue.TryDequeue(out item)) {
+            while (queue.TryDequeue(out item))
+            {
                 // NOP
             }
         }
@@ -1294,7 +1365,7 @@ namespace QuantConnect
         public static decimal RoundToSignificantDigits(this decimal d, int digits)
         {
             if (d == 0) return 0;
-            var scale = (decimal)Math.Pow(10, Math.Floor(Math.Log10((double) Math.Abs(d))) + 1);
+            var scale = (decimal)Math.Pow(10, Math.Floor(Math.Log10((double)Math.Abs(d))) + 1);
             return scale * Math.Round(d / scale, digits);
         }
 
@@ -1459,9 +1530,9 @@ namespace QuantConnect
                 );
             }
 
-            if (input <= (double) decimal.MinValue) return decimal.MinValue;
-            if (input >= (double) decimal.MaxValue) return decimal.MaxValue;
-            return (decimal) input;
+            if (input <= (double)decimal.MinValue) return decimal.MinValue;
+            if (input >= (double)decimal.MaxValue) return decimal.MaxValue;
+            return (decimal)input;
         }
 
         /// <summary>
@@ -1803,7 +1874,8 @@ namespace QuantConnect
         /// </summary>
         /// <param name="str">String we're looking for the extension for.</param>
         /// <returns>Last 4 character string of string.</returns>
-        public static string GetExtension(this string str) {
+        public static string GetExtension(this string str)
+        {
             var ext = str.Substring(Math.Max(0, str.Length - 4));
             var allowedExt = new List<string> { ".zip", ".csv", ".json", ".tsv" };
             if (!allowedExt.Contains(ext))
@@ -2212,19 +2284,19 @@ namespace QuantConnect
         {
             if (requireExactMatch)
             {
-                if (TimeSpan.Zero == timeSpan)  return Resolution.Tick;
+                if (TimeSpan.Zero == timeSpan) return Resolution.Tick;
                 if (Time.OneSecond == timeSpan) return Resolution.Second;
                 if (Time.OneMinute == timeSpan) return Resolution.Minute;
-                if (Time.OneHour   == timeSpan) return Resolution.Hour;
-                if (Time.OneDay    == timeSpan) return Resolution.Daily;
+                if (Time.OneHour == timeSpan) return Resolution.Hour;
+                if (Time.OneDay == timeSpan) return Resolution.Daily;
                 throw new InvalidOperationException(Messages.Extensions.UnableToConvertTimeSpanToResolution(timeSpan));
             }
 
             // for non-perfect matches
             if (Time.OneSecond > timeSpan) return Resolution.Tick;
             if (Time.OneMinute > timeSpan) return Resolution.Second;
-            if (Time.OneHour   > timeSpan) return Resolution.Minute;
-            if (Time.OneDay    > timeSpan) return Resolution.Hour;
+            if (Time.OneHour > timeSpan) return Resolution.Minute;
+            if (Time.OneDay > timeSpan) return Resolution.Hour;
 
             return Resolution.Daily;
         }
@@ -2263,7 +2335,7 @@ namespace QuantConnect
         /// <returns>The converted value</returns>
         public static T ConvertTo<T>(this string value)
         {
-            return (T) value.ConvertTo(typeof (T));
+            return (T)value.ConvertTo(typeof(T));
         }
 
         /// <summary>
@@ -2279,16 +2351,16 @@ namespace QuantConnect
                 return Enum.Parse(type, value, true);
             }
 
-            if (typeof (IConvertible).IsAssignableFrom(type))
+            if (typeof(IConvertible).IsAssignableFrom(type))
             {
                 return Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
             }
 
             // try and find a static parse method
-            var parse = type.GetMethod("Parse", new[] {typeof (string)});
+            var parse = type.GetMethod("Parse", new[] { typeof(string) });
             if (parse != null)
             {
-                var result = parse.Invoke(null, new object[] {value});
+                var result = parse.Invoke(null, new object[] { value });
                 return result;
             }
 
@@ -2323,7 +2395,7 @@ namespace QuantConnect
         /// <exception cref="T:System.InvalidOperationException">The maximum number of waiters has been exceeded. </exception><exception cref="T:System.ObjectDisposedException">The object has already been disposed or the <see cref="T:System.Threading.CancellationTokenSource"/> that created <paramref name="cancellationToken"/> has been disposed.</exception>
         public static bool WaitOne(this WaitHandle waitHandle, TimeSpan timeout, CancellationToken cancellationToken)
         {
-            return waitHandle.WaitOne((int) timeout.TotalMilliseconds, cancellationToken);
+            return waitHandle.WaitOne((int)timeout.TotalMilliseconds, cancellationToken);
         }
 
         /// <summary>
@@ -2906,7 +2978,7 @@ namespace QuantConnect
                     {
                         result = (T)pyObject.AsManagedObject(type);
                         // pyObject is a C# object wrapped in PyObject, in this case return true
-                        if(!pyObject.HasAttr("__name__"))
+                        if (!pyObject.HasAttr("__name__"))
                         {
                             return true;
                         }
@@ -2965,6 +3037,20 @@ namespace QuantConnect
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Gets a string representation of the given Python object and its type
+        /// to be used in user-facing messages, e.g. "'Daily' of type 'Resolution'"
+        /// </summary>
+        /// <param name="pyObject">The Python object to represent</param>
+        /// <returns>The string representation of the Python object</returns>
+        public static string ToDisplayString(this PyObject pyObject)
+        {
+            using (Py.GIL())
+            {
+                return $"'{pyObject}' of type '{pyObject.GetPythonType().Name}'";
+            }
         }
 
         /// <summary>
@@ -3343,7 +3429,7 @@ namespace QuantConnect
                 {
                     if (list == null)
                     {
-                        list = new List<T> {enumerator.Current};
+                        list = new List<T> { enumerator.Current };
                     }
                     else if (list.Count < batchSize)
                     {
@@ -3352,7 +3438,7 @@ namespace QuantConnect
                     else
                     {
                         yield return list;
-                        list = new List<T> {enumerator.Current};
+                        list = new List<T> { enumerator.Current };
                     }
                 }
 
@@ -3553,6 +3639,27 @@ namespace QuantConnect
         }
 
         /// <summary>
+        /// Helper method to get the mirror option symbol for a given option symbol
+        /// </summary>
+        /// <param name="contractSymbol">The original option contract symbol</param>
+        /// <returns>The mirror option contract symbol</returns>
+        public static Symbol GetMirrorOptionSymbol(this Symbol contractSymbol)
+        {
+            if (!contractSymbol.SecurityType.IsOption() || contractSymbol.IsCanonical())
+            {
+                throw new ArgumentException(Messages.Extensions.NotAValidOptionSymbolForMirror);
+            }
+
+            return Symbol.CreateOption(contractSymbol.Underlying,
+                contractSymbol.ID.Symbol,
+                contractSymbol.ID.Market,
+                contractSymbol.ID.OptionStyle,
+                contractSymbol.ID.OptionRight.Invert(),
+                contractSymbol.ID.StrikePrice,
+                contractSymbol.ID.Date);
+        }
+
+        /// <summary>
         /// Helper method to unsubscribe a given configuration, handling any required mapping
         /// </summary>
         public static void UnsubscribeWithMapping(this IDataQueueHandler dataQueueHandler, SubscriptionDataConfig dataConfig)
@@ -3600,7 +3707,7 @@ namespace QuantConnect
         /// <returns>Enumeration of lines in file</returns>
         public static IEnumerable<string> ReadLines(this IDataProvider dataProvider, string file)
         {
-            if(dataProvider == null)
+            if (dataProvider == null)
             {
                 throw new ArgumentException(Messages.Extensions.NullDataProvider);
             }
@@ -4161,7 +4268,7 @@ namespace QuantConnect
             switch (right)
             {
                 case OptionRight.Call: return OptionRight.Put;
-                case OptionRight.Put:  return OptionRight.Call;
+                case OptionRight.Put: return OptionRight.Call;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(right), right, null);
             }
@@ -4475,6 +4582,19 @@ namespace QuantConnect
             }
 
             return result.Value;
+        }
+
+        /// <summary>
+        /// Returns a new sorted list of (v[i] / v[i-1] - 1) values. The first key is dropped.
+        /// </summary>
+        public static SortedList<DateTime, decimal> PercentChange(this SortedList<DateTime, decimal> values)
+        {
+            var result = new SortedList<DateTime, decimal>();
+            foreach (var (current, previous) in values.Skip(1).Zip(values, (current, previous) => (current, previous)))
+            {
+                result.Add(current.Key, current.Value / previous.Value - 1);
+            }
+            return result;
         }
 
         /// <summary>

@@ -24,7 +24,6 @@ using System.Threading.Tasks;
 using ICSharpCode.SharpZipLib.Core;
 using ICSharpCode.SharpZipLib.GZip;
 using ICSharpCode.SharpZipLib.Tar;
-using Ionic.Zip;
 using QuantConnect.Logging;
 using ZipEntry = ICSharpCode.SharpZipLib.Zip.ZipEntry;
 using ZipFile = Ionic.Zip.ZipFile;
@@ -177,26 +176,7 @@ namespace QuantConnect
         /// <returns>True on success</returns>
         public static bool ZipCreateAppendData(string path, string entry, string data, bool overrideEntry = false)
         {
-            try
-            {
-                using (var zip = File.Exists(path) ? ZipFile.Read(path) : new ZipFile(path))
-                {
-                    if (zip.ContainsEntry(entry) && overrideEntry)
-                    {
-                        zip.RemoveEntry(entry);
-                    }
-
-                    zip.AddEntry(entry, data);
-                    zip.UseZip64WhenSaving = Zip64Option.Always;
-                    zip.Save();
-                }
-            }
-            catch (Exception err)
-            {
-                Log.Error(err);
-                return false;
-            }
-            return true;
+            return ZipCreateAppendData(path, entry, Encoding.UTF8.GetBytes(data), overrideEntry);
         }
 
         /// <summary>
@@ -209,19 +189,38 @@ namespace QuantConnect
         /// <returns>True on success</returns>
         public static bool ZipCreateAppendData(string path, string entry, byte[] data, bool overrideEntry = false)
         {
+            return ZipCreateAppendData(path, entry, s => s.Write(data, 0, data.Length), overrideEntry);
+        }
+
+        /// <summary>
+        /// Append the zip data to the file-entry specified.
+        /// </summary>
+        /// <param name="path">The zip file path</param>
+        /// <param name="entry">The entry name</param>
+        /// <param name="write">Write data callback</param>
+        /// <param name="overrideEntry">True if should override entry if it already exists</param>
+        /// <returns>True on success</returns>
+        private static bool ZipCreateAppendData(string path, string entry, Action<Stream> write, bool overrideEntry = false)
+        {
             try
             {
-                using (var zip = File.Exists(path) ? ZipFile.Read(path) : new ZipFile(path))
-                {
-                    if (overrideEntry && zip.ContainsEntry(entry))
-                    {
-                        zip.RemoveEntry(entry);
-                    }
+                using var fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                using var archive = new ZipArchive(fs, ZipArchiveMode.Update, leaveOpen: false);
 
-                    zip.AddEntry(entry, data);
-                    zip.UseZip64WhenSaving = Zip64Option.Always;
-                    zip.Save();
+                var existing = archive.GetEntry(entry);
+                if (existing != null)
+                {
+                    if (!overrideEntry)
+                    {
+                        return false;
+                    }
+                    existing.Delete();
                 }
+
+                var zipEntry = archive.CreateEntry(entry, CompressionLevel.Optimal);
+
+                using var entryStream = zipEntry.Open();
+                write(entryStream);
             }
             catch (Exception err)
             {
@@ -846,7 +845,7 @@ namespace QuantConnect
         /// <returns>List of unzipped file names</returns>
         public static List<string> UnzipToFolder(byte[] zipData, string outputFolder)
         {
-            var stream = new MemoryStream(zipData);
+            using var stream = new MemoryStream(zipData);
             return UnzipToFolder(stream, outputFolder);
         }
 
@@ -858,7 +857,7 @@ namespace QuantConnect
         public static List<string> UnzipToFolder(string zipFile)
         {
             var outFolder = Path.GetDirectoryName(zipFile);
-            var stream = File.OpenRead(zipFile);
+            using var stream = File.OpenRead(zipFile);
             return UnzipToFolder(stream, outFolder);
         }
 
@@ -876,22 +875,18 @@ namespace QuantConnect
             {
                 outFolder = Directory.GetCurrentDirectory();
             }
-            ICSharpCode.SharpZipLib.Zip.ZipFile zf = null;
 
             try
             {
-                zf = new ICSharpCode.SharpZipLib.Zip.ZipFile(dataStream);
+                using var archive = new ZipArchive(dataStream, ZipArchiveMode.Read, leaveOpen: true);
 
-                foreach (ZipEntry zipEntry in zf)
+                foreach (var zipEntry in archive.Entries)
                 {
                     //Ignore Directories
-                    if (!zipEntry.IsFile) continue;
-
-                    var buffer = new byte[4096]; // 4K is optimum
-                    var zipStream = zf.GetInputStream(zipEntry);
+                    if (string.IsNullOrEmpty(zipEntry.Name)) continue;
 
                     // Manipulate the output filename here as desired.
-                    var fullZipToPath = Path.Combine(outFolder, zipEntry.Name);
+                    var fullZipToPath = Path.Combine(outFolder, zipEntry.FullName);
 
                     var targetFile = new FileInfo(fullZipToPath);
                     if (targetFile.Directory != null && !targetFile.Directory.Exists)
@@ -903,10 +898,9 @@ namespace QuantConnect
                     files.Add(fullZipToPath);
 
                     //Copy the data in buffer chunks
-                    using (var streamWriter = File.Create(fullZipToPath))
-                    {
-                        StreamUtils.Copy(zipStream, streamWriter, buffer);
-                    }
+                    using var entryStream = zipEntry.Open();
+                    using var streamWriter = File.Create(fullZipToPath);
+                    entryStream.CopyTo(streamWriter);
                 }
             }
             catch
@@ -914,14 +908,6 @@ namespace QuantConnect
                 // lets catch the exception just to log some information about the zip file
                 Log.Error($"Compression.UnzipToFolder(): Failure: outFolder: {outFolder} - files: {string.Join(",", files)}");
                 throw;
-            }
-            finally
-            {
-                if (zf != null)
-                {
-                    zf.IsStreamOwner = true; // Makes close also shut the underlying stream
-                    zf.Close(); // Ensure we release resources
-                }
             }
             return files;
         } // End UnZip

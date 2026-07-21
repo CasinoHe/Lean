@@ -34,7 +34,7 @@ namespace QuantConnect.Data
     {
         private readonly PriorityQueue<ConsolidatorWrapper, ConsolidatorScanPriority> _consolidatorsSortedByScanTime;
         private readonly Dictionary<IDataConsolidator, ConsolidatorWrapper> _consolidators;
-        private List<Tuple<ConsolidatorWrapper, ConsolidatorScanPriority>> _consolidatorsToAdd;
+        private List<ConsolidatorWrapper> _consolidatorsToAdd;
         private readonly object _threadSafeCollectionLock;
         private readonly ITimeKeeper _timeKeeper;
         private IAlgorithmSubscriptionManager _subscriptionManager;
@@ -231,7 +231,7 @@ namespace QuantConnect.Data
                 lock (_threadSafeCollectionLock)
                 {
                     _consolidatorsToAdd ??= new();
-                    _consolidatorsToAdd.Add(new(wrapper, wrapper.Priority));
+                    _consolidatorsToAdd.Add(wrapper);
                 }
                 return;
             }
@@ -296,10 +296,39 @@ namespace QuantConnect.Data
         {
             if (!pyConsolidator.TryConvert(out IDataConsolidator consolidator))
             {
-                consolidator = new DataConsolidatorPythonWrapper(pyConsolidator);
+                // reuse the wrapper created when this python consolidator was added instead of building a
+                // throwaway one: a new wrapper would subscribe to the live python object's event just to be
+                // disposed again, and would leave the original wrapper's subscription leaked
+                consolidator = FindPythonConsolidator(symbol, pyConsolidator)
+                    ?? new DataConsolidatorPythonWrapper(pyConsolidator);
             }
 
             RemoveConsolidator(symbol, consolidator);
+        }
+
+        /// <summary>
+        /// Finds the <see cref="DataConsolidatorPythonWrapper"/> previously created for the given python
+        /// consolidator so it can be removed and disposed, rather than a throwaway wrapper that would churn
+        /// the live python object's event subscription and leak the original one.
+        /// </summary>
+        private IDataConsolidator FindPythonConsolidator(Symbol symbol, PyObject pyConsolidator)
+        {
+            var configs = symbol != null
+                ? _subscriptionManager.GetSubscriptionDataConfigs(symbol)
+                : Subscriptions;
+
+            foreach (var subscription in configs)
+            {
+                foreach (var existing in subscription.Consolidators)
+                {
+                    if (existing is DataConsolidatorPythonWrapper && existing.Equals(pyConsolidator))
+                    {
+                        return existing;
+                    }
+                }
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -313,7 +342,13 @@ namespace QuantConnect.Data
             {
                 lock (_threadSafeCollectionLock)
                 {
-                    _consolidatorsToAdd.DoForEach(x => _consolidatorsSortedByScanTime.Enqueue(x.Item1, x.Item2));
+                    foreach (var consolidator in _consolidatorsToAdd)
+                    {
+                        // At this point we already calculate the warm up start time, so we can reset the UtcScanTime property
+                        // To ensure correct scan times
+                        consolidator.AdvanceScanTime();
+                        _consolidatorsSortedByScanTime.Enqueue(consolidator, consolidator.Priority);
+                    }
                     _consolidatorsToAdd = null;
                 }
             }

@@ -197,6 +197,21 @@ namespace QuantConnect.Brokerages
         /// <summary>
         /// Transaction and submit/execution rules will use dYdX models
         /// </summary>
-        DYDX
+        DYDX,
+
+        /// <summary>
+        /// Transaction and submit/execution rules will use Webull models
+        /// </summary>
+        Webull,
+
+        /// <summary>
+        /// Transaction and submit/execution rules will use Public.com models
+        /// </summary>
+        Public,
+
+        /// <summary>
+        /// Transaction and submit/execution rules will use bloomberg fix models
+        /// </summary>
+        BloombergFix
     }
 }

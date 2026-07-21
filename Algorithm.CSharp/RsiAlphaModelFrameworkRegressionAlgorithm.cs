@@ -41,7 +41,7 @@ namespace QuantConnect.Algorithm.CSharp
             }
         }
 
-        public override long DataPoints => 772;
+        public override long DataPoints => 771;
 
         public override int AlgorithmHistoryDataPoints => 56;
 
@@ -58,7 +58,7 @@ namespace QuantConnect.Algorithm.CSharp
             {"Total Orders", "28"},
             {"Average Win", "0.14%"},
             {"Average Loss", "-0.08%"},
-            {"Compounding Annual Return", "0.234%"},
+            {"Compounding Annual Return", "0.237%"},
             {"Drawdown", "1.900%"},
             {"Expectancy", "0.186"},
             {"Start Equity", "100000"},
@@ -66,7 +66,7 @@ namespace QuantConnect.Algorithm.CSharp
             {"Net Profit", "0.019%"},
             {"Sharpe Ratio", "-0.1"},
             {"Sortino Ratio", "-0.126"},
-            {"Probabilistic Sharpe Ratio", "37.678%"},
+            {"Probabilistic Sharpe Ratio", "35.695%"},
             {"Loss Rate", "57%"},
             {"Win Rate", "43%"},
             {"Profit-Loss Ratio", "1.77"},
