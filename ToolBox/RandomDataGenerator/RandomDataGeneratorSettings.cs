@@ -26,7 +26,7 @@ namespace QuantConnect.ToolBox.RandomDataGenerator
 {
     public class RandomDataGeneratorSettings
     {
-        private static int MarketCode = 100;
+        private static int MarketCode = 199;
         private static readonly string[] DateFormats = { DateFormat.EightCharacter, DateFormat.YearMonth, "yyyy-MM-dd" };
 
         public DateTime Start { get; init; }
