@@ -72,7 +72,15 @@ namespace QuantConnect
             Tuple.Create(EUREX, 40),
             Tuple.Create(OSE, 41),
             Tuple.Create(DYDX, 42),
-            Tuple.Create(KRX, 43)
+            Tuple.Create(KRX, 43),
+
+            Tuple.Create(XAMS, 100),
+            Tuple.Create(XBRU, 101),
+            Tuple.Create(XETR, 102),
+            Tuple.Create(XHEL, 103),
+            Tuple.Create(XMAD, 104),
+            Tuple.Create(XMIL, 105),
+            Tuple.Create(XPAR, 106)
         };
 
         static Market()
@@ -272,6 +280,27 @@ namespace QuantConnect
         /// Korea Exchange
         /// </summary>
         public const string KRX = "krx";
+
+        /// <summary>Euronext Amsterdam</summary>
+        public const string XAMS = "xams";
+
+        /// <summary>Euronext Brussels</summary>
+        public const string XBRU = "xbru";
+
+        /// <summary>Deutsche Boerse Xetra</summary>
+        public const string XETR = "xetr";
+
+        /// <summary>Nasdaq Helsinki</summary>
+        public const string XHEL = "xhel";
+
+        /// <summary>Bolsa de Madrid</summary>
+        public const string XMAD = "xmad";
+
+        /// <summary>Borsa Italiana</summary>
+        public const string XMIL = "xmil";
+
+        /// <summary>Euronext Paris</summary>
+        public const string XPAR = "xpar";
 
         /// <summary>
         /// Adds the specified market to the map of available markets with the specified identifier.

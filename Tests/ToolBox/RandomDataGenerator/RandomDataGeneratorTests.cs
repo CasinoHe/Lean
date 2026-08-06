@@ -37,6 +37,36 @@ namespace QuantConnect.Tests.ToolBox.RandomDataGenerator
     public class RandomDataGeneratorTests
     {
         [Test]
+        public void UnknownMarketUsesIdentifierBeyondReservedEuropeanRange()
+        {
+            var market = $"test-market-{Guid.NewGuid():N}";
+
+            RandomDataGeneratorSettings.FromCommandLineArguments(
+                "20260101",
+                "20260102",
+                "1",
+                market,
+                "Equity",
+                "Daily",
+                "Dense",
+                "false",
+                "1",
+                null,
+                "5.0",
+                "30.0",
+                "100.0",
+                "60.0",
+                "30.0",
+                "BaroneAdesiWhaleyApproximationEngine",
+                "Daily",
+                "1",
+                new List<string>(),
+                100);
+
+            Assert.GreaterOrEqual(Market.Encode(market), 200);
+        }
+
+        [Test]
         [TestCase("2020, 1, 1 00:00:00", "2020, 1, 1 00:00:00", "2020, 1, 1 00:00:00")]
         [TestCase("2020, 1, 1 00:00:00", "2020, 2, 1 00:00:00", "2020, 1, 16 12:00:00")] // (31 days / 2) = 15.5 = 16 Rounds up to 12 pm
         [TestCase("2020, 1, 1 00:00:00", "2020, 3, 1 00:00:00", "2020, 1, 31 00:00:00")] // (60 days / 2) = 30
