@@ -27,5 +27,5 @@ This file applies inside `Lean/`. Read `../Docs/fork-notes.md` for the detailed 
 ## Working Guidance
 
 - Before changing subscription, consolidator, or history-provider code, verify whether the current behavior is a fork feature rather than an accidental divergence.
-- When debugging strategy behavior, check forked subscription mechanics before assuming the algorithm code is wrong.
+- Include forked subscription mechanics when investigating subscription, consolidator, or history discrepancies.
 - Keep mechanism explanations in `../Docs/fork-notes.md`; keep this file short and operational.
