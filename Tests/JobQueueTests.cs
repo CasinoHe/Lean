@@ -50,6 +50,11 @@ namespace QuantConnect.Tests
         [Test]
         public void JobQueueUsesConfiguredRamAllocationForLocalJobs()
         {
+            var originalAlgorithmLocation = Config.Get("algorithm-location");
+            var originalAlgorithmLanguage = Config.Get("algorithm-language");
+            var originalAlgorithmTypeName = Config.Get("algorithm-type-name");
+            var originalRamAllocation = Config.Get("ram-allocation");
+            var originalLiveMode = Config.GetBool("live-mode");
             var algorithmPath = Path.GetTempFileName();
             try
             {
@@ -67,8 +72,23 @@ namespace QuantConnect.Tests
             }
             finally
             {
+                Config.Set("algorithm-location", originalAlgorithmLocation);
+                Config.Set("algorithm-language", originalAlgorithmLanguage);
+                Config.Set("algorithm-type-name", originalAlgorithmTypeName);
+                Config.Set("ram-allocation", originalRamAllocation);
+                Config.Set("live-mode", originalLiveMode);
+                Globals.Reset();
                 File.Delete(algorithmPath);
             }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Config.Get("algorithm-location"), Is.EqualTo(originalAlgorithmLocation));
+                Assert.That(Config.Get("algorithm-language"), Is.EqualTo(originalAlgorithmLanguage));
+                Assert.That(Config.Get("algorithm-type-name"), Is.EqualTo(originalAlgorithmTypeName));
+                Assert.That(Config.Get("ram-allocation"), Is.EqualTo(originalRamAllocation));
+                Assert.That(Globals.LiveMode, Is.EqualTo(originalLiveMode));
+            });
         }
     }
 
