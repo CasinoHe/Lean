@@ -142,7 +142,9 @@ namespace QuantConnect.Queues
                 MinuteLimit = Config.GetInt("symbol-minute-limit", 10000),
                 SecondLimit = Config.GetInt("symbol-second-limit", 10000),
                 TickLimit = Config.GetInt("symbol-tick-limit", 10000),
-                RamAllocation = int.MaxValue,
+                // Keep the historical unlimited local default, while allowing a strategy config
+                // to cap memory used by Lean's data caches and resource guard.
+                RamAllocation = Config.GetInt("ram-allocation", int.MaxValue),
                 MaximumDataPointsPerChartSeries = Config.GetInt("maximum-data-points-per-chart-series", 1000000),
                 MaximumChartSeries = Config.GetInt("maximum-chart-series", 30),
                 StorageLimit = Config.GetValue("storage-limit", 10737418240L),

@@ -17,6 +17,7 @@ using NUnit.Framework;
 using QuantConnect.Configuration;
 using QuantConnect.Queues;
 using System;
+using System.IO;
 
 namespace QuantConnect.Tests
 {
@@ -43,6 +44,30 @@ namespace QuantConnect.Tests
             else
             {
                 Assert.Throws<ArgumentException>(() => jobQueue.GetLanguage());
+            }
+        }
+
+        [Test]
+        public void JobQueueUsesConfiguredRamAllocationForLocalJobs()
+        {
+            var algorithmPath = Path.GetTempFileName();
+            try
+            {
+                File.WriteAllBytes(algorithmPath, new byte[] { 1 });
+                Config.Set("algorithm-location", algorithmPath);
+                Config.Set("algorithm-language", "CSharp");
+                Config.Set("algorithm-type-name", "ConfiguredRamAllocationTest");
+                Config.Set("ram-allocation", "2048");
+                Config.Set("live-mode", false);
+                Globals.Reset();
+
+                var job = new JobQueue().NextJob(out _);
+
+                Assert.That(job.RamAllocation, Is.EqualTo(2048));
+            }
+            finally
+            {
+                File.Delete(algorithmPath);
             }
         }
     }
