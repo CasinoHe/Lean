@@ -14,6 +14,7 @@
 */
 
 using NUnit.Framework;
+using Newtonsoft.Json.Linq;
 using QuantConnect.Configuration;
 using QuantConnect.Queues;
 using System;
@@ -50,10 +51,12 @@ namespace QuantConnect.Tests
         [Test]
         public void JobQueueUsesConfiguredRamAllocationForLocalJobs()
         {
-            var originalAlgorithmLocation = Config.Get("algorithm-location");
-            var originalAlgorithmLanguage = Config.Get("algorithm-language");
-            var originalAlgorithmTypeName = Config.Get("algorithm-type-name");
-            var originalRamAllocation = Config.Get("ram-allocation");
+            var originalAlgorithmLocation = Config.GetToken("algorithm-location")?.DeepClone();
+            var originalAlgorithmLanguage = Config.GetToken("algorithm-language")?.DeepClone();
+            var originalAlgorithmTypeName = Config.GetToken("algorithm-type-name")?.DeepClone();
+            var originalRamAllocation = Config.GetToken("ram-allocation")?.DeepClone();
+            var originalRamAllocationValue = Config.GetInt("ram-allocation", int.MaxValue);
+            var originalLiveModeToken = Config.GetToken("live-mode")?.DeepClone();
             var originalLiveMode = Config.GetBool("live-mode");
             var algorithmPath = Path.GetTempFileName();
             try
@@ -72,23 +75,34 @@ namespace QuantConnect.Tests
             }
             finally
             {
-                Config.Set("algorithm-location", originalAlgorithmLocation);
-                Config.Set("algorithm-language", originalAlgorithmLanguage);
-                Config.Set("algorithm-type-name", originalAlgorithmTypeName);
-                Config.Set("ram-allocation", originalRamAllocation);
-                Config.Set("live-mode", originalLiveMode);
+                RestoreConfigValue("algorithm-location", originalAlgorithmLocation);
+                RestoreConfigValue("algorithm-language", originalAlgorithmLanguage);
+                RestoreConfigValue("algorithm-type-name", originalAlgorithmTypeName);
+                RestoreConfigValue("ram-allocation", originalRamAllocation);
+                RestoreConfigValue("live-mode", originalLiveModeToken);
                 Globals.Reset();
                 File.Delete(algorithmPath);
             }
 
             Assert.Multiple(() =>
             {
-                Assert.That(Config.Get("algorithm-location"), Is.EqualTo(originalAlgorithmLocation));
-                Assert.That(Config.Get("algorithm-language"), Is.EqualTo(originalAlgorithmLanguage));
-                Assert.That(Config.Get("algorithm-type-name"), Is.EqualTo(originalAlgorithmTypeName));
-                Assert.That(Config.Get("ram-allocation"), Is.EqualTo(originalRamAllocation));
+                Assert.That(JToken.DeepEquals(Config.GetToken("algorithm-location"), originalAlgorithmLocation), Is.True);
+                Assert.That(JToken.DeepEquals(Config.GetToken("algorithm-language"), originalAlgorithmLanguage), Is.True);
+                Assert.That(JToken.DeepEquals(Config.GetToken("algorithm-type-name"), originalAlgorithmTypeName), Is.True);
+                Assert.That(JToken.DeepEquals(Config.GetToken("ram-allocation"), originalRamAllocation), Is.True);
+                Assert.That(Config.GetInt("ram-allocation", int.MaxValue), Is.EqualTo(originalRamAllocationValue));
+                Assert.That(JToken.DeepEquals(Config.GetToken("live-mode"), originalLiveModeToken), Is.True);
                 Assert.That(Globals.LiveMode, Is.EqualTo(originalLiveMode));
             });
+        }
+
+        private static void RestoreConfigValue(string key, JToken originalValue)
+        {
+            Config.GetToken(key)?.Parent?.Remove();
+            if (originalValue != null)
+            {
+                Config.Set(key, originalValue.DeepClone());
+            }
         }
     }
 
