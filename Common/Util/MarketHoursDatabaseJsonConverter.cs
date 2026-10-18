@@ -120,6 +120,9 @@ namespace QuantConnect.Util
                 // we sort so we process generic entries and non options first
                 foreach (var entry in entries.OrderBy(kvp => kvp.Key.Symbol != null ? 1 : 0).ThenBy(kvp => kvp.Key.SecurityType.IsOption() ? 1 : 0))
                 {
+                    // Invalid explicit sessions must fail instead of silently
+                    // dropping the root and falling back to its wildcard.
+                    entry.Value.ConvertMarketHoursOverrides();
                     try
                     {
                         result.TryGetValue(entry.Key.CreateCommonKey(), out var marketEntry);
@@ -244,6 +247,13 @@ namespace QuantConnect.Util
             public List<string> BankHolidays { get; set; } = new();
 
             /// <summary>
+            /// Complete exchange-local sessions keyed by calendar date. Explicit
+            /// root sessions are not inherited from a wildcard or an underlying.
+            /// </summary>
+            [JsonProperty("marketHoursOverrides", NullValueHandling = NullValueHandling.Ignore)]
+            public Dictionary<string, List<MarketHoursSegment>> MarketHoursOverrides { get; set; }
+
+            /// <summary>
             /// Initializes a new instance of the <see cref="MarketHoursDatabaseEntryJson"/> class
             /// </summary>
             /// <param name="entry">The entry instance to copy</param>
@@ -268,8 +278,27 @@ namespace QuantConnect.Util
                 SetSegmentsForDay(hours, DayOfWeek.Saturday, out var saturday);
                 Saturday = saturday;
                 Holidays = hours.Holidays.Select(x => x.ToString("M/d/yyyy", CultureInfo.InvariantCulture)).ToList();
+                BankHolidays = hours.BankHolidays.Select(x => x.ToString("M/d/yyyy", CultureInfo.InvariantCulture)).ToList();
                 EarlyCloses = entry.ExchangeHours.EarlyCloses.ToDictionary(pair => pair.Key.ToString("M/d/yyyy", CultureInfo.InvariantCulture), pair => pair.Value);
                 LateOpens = entry.ExchangeHours.LateOpens.ToDictionary(pair => pair.Key.ToString("M/d/yyyy", CultureInfo.InvariantCulture), pair => pair.Value);
+                if (hours.MarketHoursOverrides.Count != 0)
+                {
+                    MarketHoursOverrides = hours.MarketHoursOverrides.ToDictionary(
+                        pair => pair.Key.ToString("M/d/yyyy", CultureInfo.InvariantCulture), pair => pair.Value.Segments.ToList());
+                }
+            }
+
+            internal IReadOnlyDictionary<DateTime, LocalMarketHours> ConvertMarketHoursOverrides()
+            {
+                var result = new Dictionary<DateTime, LocalMarketHours>();
+                foreach (var pair in MarketHoursOverrides ?? new Dictionary<string, List<MarketHoursSegment>>())
+                {
+                    var date = DateTime.ParseExact(pair.Key, "M/d/yyyy", CultureInfo.InvariantCulture);
+                    if (pair.Value == null || pair.Value.Any(segment => segment == null || segment.State == MarketHoursState.Closed))
+                        throw new ArgumentException("Dated sessions require explicit OPEN segments, or an empty list for closure.");
+                    result.Add(date, new LocalMarketHours(date.DayOfWeek, pair.Value));
+                }
+                return SecurityExchangeHours.ValidateAndCopyMarketHoursOverrides(result);
             }
 
             /// <summary>
@@ -337,7 +366,7 @@ namespace QuantConnect.Util
                     }
                 }
 
-                var exchangeHours = new SecurityExchangeHours(DateTimeZoneProviders.Tzdb[ExchangeTimeZone], holidayDates, hours, earlyCloses, lateOpens, bankHolidayDates);
+                var exchangeHours = new SecurityExchangeHours(DateTimeZoneProviders.Tzdb[ExchangeTimeZone], holidayDates, hours, earlyCloses, lateOpens, bankHolidayDates, ConvertMarketHoursOverrides());
                 return new MarketHoursDatabase.Entry(DateTimeZoneProviders.Tzdb[DataTimeZone], exchangeHours);
             }
 
