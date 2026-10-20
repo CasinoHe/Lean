@@ -109,7 +109,10 @@ namespace QuantConnect.DownloaderDataProvider.Launcher.Models
                 {
                     var request = new Data.HistoryRequest(startUtc, endUtc, dataType, symbol, resolution, exchangeHours: exchangeHours, dataTimeZone: dataTimeZone, resolution,
                         // let's not ask for extended market hours for hour and daily resolutions to match lean
-                        includeExtendedMarketHours: resolution != Resolution.Hour && resolution != Resolution.Daily, false, DataNormalizationMode.Raw, tickType);
+                        includeExtendedMarketHours: symbol.SecurityType == SecurityType.Future
+                            && !string.IsNullOrWhiteSpace(Config.Get("data-downloader-include-extended-market-hours"))
+                            ? Config.GetValue("data-downloader-include-extended-market-hours", resolution != Resolution.Hour && resolution != Resolution.Daily)
+                            : resolution != Resolution.Hour && resolution != Resolution.Daily, false, DataNormalizationMode.Raw, tickType);
 
                     var history = _brokerage.GetHistory(request);
 
