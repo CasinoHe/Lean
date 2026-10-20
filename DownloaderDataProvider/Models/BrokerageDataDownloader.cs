@@ -92,6 +92,29 @@ namespace QuantConnect.DownloaderDataProvider.Launcher.Models
             var resolution = dataDownloaderGetParameters.Resolution;
             var startUtc = dataDownloaderGetParameters.StartUtc;
             var endUtc = dataDownloaderGetParameters.EndUtc;
+            // Explicit UTC window is limited to futures intraday downloads. Date-only CLI
+            // bounds still enclose it, and defaults for every other caller are unchanged.
+            if (symbol.SecurityType == SecurityType.Future && (resolution == Resolution.Minute || resolution == Resolution.Hour))
+            {
+                var first = Config.Get("data-downloader-futures-start-utc");
+                var last = Config.Get("data-downloader-futures-end-utc");
+                if (!string.IsNullOrWhiteSpace(first) || !string.IsNullOrWhiteSpace(last))
+                {
+                    if (!DateTimeOffset.TryParse(first, System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.None, out var from)
+                        || !DateTimeOffset.TryParse(last, System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.None, out var until)
+                        || from.Offset != TimeSpan.Zero || until.Offset != TimeSpan.Zero || from >= until
+                        || !(first.EndsWith("Z", StringComparison.OrdinalIgnoreCase) || first.EndsWith("+00:00"))
+                        || !(last.EndsWith("Z", StringComparison.OrdinalIgnoreCase) || last.EndsWith("+00:00")))
+                    {
+                        throw new ArgumentException("Futures downloader window requires an ordered pair of explicit UTC timestamps.");
+                    }
+                    startUtc = startUtc > from.UtcDateTime ? startUtc : from.UtcDateTime;
+                    endUtc = endUtc < until.UtcDateTime ? endUtc : until.UtcDateTime;
+                    if (startUtc >= endUtc) { return Enumerable.Empty<BaseData>(); }
+                }
+            }
             var tickType = dataDownloaderGetParameters.TickType;
 
             var dataType = LeanData.GetDataType(resolution, tickType);

@@ -46,6 +46,54 @@ namespace QuantConnect.Tests.Common.Util
             Assert.That(result.Count(), Is.EqualTo(expected));
         }
 
+        [TestCase(SecurityType.Future, "2026-10-01T20:45:00Z", "2026-10-01T21:00:00Z", 20, 45, 21)]
+        [TestCase(SecurityType.Equity, "2026-10-01T20:45:00Z", "2026-10-01T21:00:00Z", 0, 0, 0)]
+        public void IntradayWindowIsOnlyAppliedToFutures(SecurityType type, string start, string end, int hour, int minute, int endHour)
+        {
+            const string firstKey = "data-downloader-futures-start-utc", lastKey = "data-downloader-futures-end-utc";
+            var firstPrevious = Config.Get(firstKey, null); var lastPrevious = Config.Get(lastKey, null);
+            try
+            {
+                Config.Set(firstKey, start); Config.Set(lastKey, end);
+                HistoryRequest request = null;
+                var brokerage = new Mock<IBrokerage>();
+                brokerage.Setup(b => b.GetHistory(It.IsAny<HistoryRequest>()))
+                    .Callback<HistoryRequest>(r => request = r).Returns(Enumerable.Empty<BaseData>());
+                var downloader = (Downloader)RuntimeHelpers.GetUninitializedObject(typeof(Downloader));
+                typeof(Downloader).GetField("_brokerage", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(downloader, brokerage.Object);
+                typeof(Downloader).GetField("_marketHoursDatabase", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .SetValue(downloader, MarketHoursDatabase.FromDataFolder());
+                var symbol = type == SecurityType.Future
+                    ? Symbol.CreateFuture("ES", Market.CME, new DateTime(2026, 12, 18))
+                    : Symbol.Create("SPY", SecurityType.Equity, Market.USA);
+                downloader.Get(new DataDownloaderGetParameters(symbol, Resolution.Minute,
+                    new DateTime(2026, 10, 1), new DateTime(2026, 10, 2), TickType.Trade)).ToList();
+                Assert.That(request.StartTimeUtc, Is.EqualTo(new DateTime(2026, 10, 1, hour, minute, 0)));
+                Assert.That(request.EndTimeUtc, Is.EqualTo(type == SecurityType.Future
+                    ? new DateTime(2026, 10, 1, endHour, 0, 0) : new DateTime(2026, 10, 2)));
+            }
+            finally { Config.Set(firstKey, firstPrevious); Config.Set(lastKey, lastPrevious); }
+        }
+
+        [TestCase("2026-10-01T20:45:00Z", null)]
+        [TestCase("2026-10-01T21:00:00Z", "2026-10-01T20:45:00Z")]
+        [TestCase("2026-10-01T20:45:00", "2026-10-01T21:00:00Z")]
+        [TestCase("2026-10-01T20:45:00-04:00", "2026-10-02T01:00:00Z")]
+        public void RejectsInvalidFuturesWindowBeforeCallingBrokerage(string start, string end)
+        {
+            const string firstKey = "data-downloader-futures-start-utc", lastKey = "data-downloader-futures-end-utc";
+            var previousStart = Config.Get(firstKey, null); var previousEnd = Config.Get(lastKey, null);
+            try
+            {
+                Config.Set(firstKey, start); Config.Set(lastKey, end);
+                var downloader = (Downloader)RuntimeHelpers.GetUninitializedObject(typeof(Downloader));
+                var symbol = Symbol.CreateFuture("ES", Market.CME, new DateTime(2026, 12, 18));
+                Assert.Throws<ArgumentException>(() => downloader.Get(new DataDownloaderGetParameters(symbol,
+                    Resolution.Minute, new DateTime(2026, 10, 1), new DateTime(2026, 10, 2), TickType.Trade)).ToList());
+            }
+            finally { Config.Set(firstKey, previousStart); Config.Set(lastKey, previousEnd); }
+        }
+
         [TestCase(SecurityType.Future, Resolution.Hour, "true", true)]
         [TestCase(SecurityType.Future, Resolution.Daily, "true", true)]
         [TestCase(SecurityType.Future, Resolution.Minute, "false", false)]
