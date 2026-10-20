@@ -15,6 +15,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using NodaTime;
@@ -38,6 +39,8 @@ namespace QuantConnect.Securities
         private HashSet<long> _bankHolidays;
         private IReadOnlyDictionary<DateTime, TimeSpan> _earlyCloses;
         private IReadOnlyDictionary<DateTime, TimeSpan> _lateOpens;
+        private IReadOnlyDictionary<DateTime, LocalMarketHours> _marketHoursOverrides =
+            new ReadOnlyDictionary<DateTime, LocalMarketHours>(new Dictionary<DateTime, LocalMarketHours>());
 
         // these are listed individually for speed
         private LocalMarketHours _sunday;
@@ -100,6 +103,13 @@ namespace QuantConnect.Securities
         /// Gets the late opens for this exchange
         /// </summary>
         public IReadOnlyDictionary<DateTime, TimeSpan> LateOpens => _lateOpens;
+
+        /// <summary>
+        /// Complete matching sessions for specific exchange-local calendar dates.
+        /// These replace holidays, early closes, late opens and the weekly template
+        /// for that date without changing expiry business-day exclusions.
+        /// </summary>
+        public IReadOnlyDictionary<DateTime, LocalMarketHours> MarketHoursOverrides => _marketHoursOverrides;
 
         /// <summary>
         /// Gets the most common tradable time during the market week.
@@ -166,6 +176,40 @@ namespace QuantConnect.Securities
                 .First().Key;
 
             IsMarketAlwaysOpen = CheckIsMarketAlwaysOpen();
+        }
+
+        /// <summary>
+        /// Creates exchange hours with explicit exchange-local dated sessions.
+        /// Empty dated hours mean closed; an absent date retains existing behavior.
+        /// </summary>
+        public SecurityExchangeHours(DateTimeZone timeZone, IEnumerable<DateTime> holidayDates,
+            Dictionary<DayOfWeek, LocalMarketHours> marketHoursForEachDayOfWeek,
+            IReadOnlyDictionary<DateTime, TimeSpan> earlyCloses, IReadOnlyDictionary<DateTime, TimeSpan> lateOpens,
+            IEnumerable<DateTime> bankHolidayDates, IReadOnlyDictionary<DateTime, LocalMarketHours> marketHoursOverrides)
+            : this(timeZone, holidayDates, marketHoursForEachDayOfWeek, earlyCloses, lateOpens, bankHolidayDates)
+        {
+            _marketHoursOverrides = ValidateAndCopyMarketHoursOverrides(marketHoursOverrides);
+            IsMarketAlwaysOpen = CheckIsMarketAlwaysOpen();
+        }
+
+        internal static IReadOnlyDictionary<DateTime, LocalMarketHours> ValidateAndCopyMarketHoursOverrides(
+            IReadOnlyDictionary<DateTime, LocalMarketHours> overrides)
+        {
+            var copy = new Dictionary<DateTime, LocalMarketHours>();
+            foreach (var pair in overrides ?? new Dictionary<DateTime, LocalMarketHours>())
+            {
+                if (pair.Key.TimeOfDay != TimeSpan.Zero || pair.Value == null || pair.Key.DayOfWeek != pair.Value.DayOfWeek)
+                    throw new ArgumentException("Dated market hours require a local calendar date and matching weekday.");
+                var lastEnd = TimeSpan.Zero;
+                foreach (var segment in pair.Value.Segments)
+                {
+                    if (segment.Start < lastEnd || segment.End <= segment.Start || segment.End > Time.OneDay)
+                        throw new ArgumentException("Dated market hours must be ordered, non-overlapping intervals within one local day.");
+                    lastEnd = segment.End;
+                }
+                copy.Add(pair.Key, new LocalMarketHours(pair.Key.DayOfWeek, pair.Value.Segments));
+            }
+            return new ReadOnlyDictionary<DateTime, LocalMarketHours>(copy);
         }
 
         /// <summary>
@@ -324,11 +368,12 @@ namespace QuantConnect.Securities
 
             var lastDay = time.Date.AddDays(-1);
             var lastDayMarketHours = GetMarketHours(lastDay);
-            var lastDaySegment = lastDayMarketHours.Segments.LastOrDefault();
+            var lastDaySegment = lastDayMarketHours.Segments.LastOrDefault(segment =>
+                extendedMarketHours || segment.State == MarketHoursState.Market);
             do
             {
                 var marketHours = GetMarketHours(time);
-                if (!marketHours.IsClosedAllDay && !_holidays.Contains(time.Date.Ticks))
+                if (!marketHours.IsClosedAllDay)
                 {
                     var marketOpenTimeOfDay = marketHours.GetMarketOpen(time.TimeOfDay, extendedMarketHours, lastDaySegment?.End);
                     if (marketOpenTimeOfDay.HasValue)
@@ -343,13 +388,14 @@ namespace QuantConnect.Securities
                     // If there was an early close the market opens until next day first segment,
                     // so we don't take into account continuous segments between days, then
                     // lastDaySegment should be null
-                    if (_earlyCloses.ContainsKey(time.Date))
+                    if (_earlyCloses.ContainsKey(time.Date) && !_marketHoursOverrides.ContainsKey(time.Date))
                     {
                         lastDaySegment = null;
                     }
                     else
                     {
-                        lastDaySegment = marketHours.Segments.LastOrDefault();
+                        lastDaySegment = marketHours.Segments.LastOrDefault(segment =>
+                            extendedMarketHours || segment.State == MarketHoursState.Market);
                     }
                 }
                 else
@@ -400,13 +446,13 @@ namespace QuantConnect.Securities
             do
             {
                 var marketHours = GetMarketHours(time);
-                if (!marketHours.IsClosedAllDay && !_holidays.Contains(time.Date.Ticks))
+                if (!marketHours.IsClosedAllDay)
                 {
                     // Get next day first segment. This is made because we need to check the segment returned
                     // by GetMarketClose() ends at segment.End and not continues in the next segment. We get
                     // the next day first segment for the case in which the next market close is the last segment
                     // of the current day
-                    var nextSegment = GetNextOrPreviousSegment(time, isNextDay: true);
+                    var nextSegment = GetNextOrPreviousSegment(time, isNextDay: true, extendedMarketHours);
                     var marketCloseTimeOfDay = marketHours.GetMarketClose(time.TimeOfDay, extendedMarketHours, lastClose, nextSegment?.Start);
                     if (marketCloseTimeOfDay.HasValue)
                     {
@@ -430,17 +476,19 @@ namespace QuantConnect.Securities
         /// </summary>
         /// <param name="time">Time of reference</param>
         /// <param name="isNextDay">True to get next day first segment. False to get previous day last segment</param>
+        /// <param name="extendedMarketHours">True to include extended sessions when testing midnight continuity</param>
         /// <returns>Next day first segment or previous day last segment</returns>
-        private MarketHoursSegment GetNextOrPreviousSegment(DateTime time, bool isNextDay)
+        private MarketHoursSegment GetNextOrPreviousSegment(DateTime time, bool isNextDay, bool extendedMarketHours)
         {
             var nextOrPrevious = isNextDay ? 1 : -1;
             var nextOrPreviousDay = time.Date.AddDays(nextOrPrevious);
-            if (_earlyCloses.ContainsKey(nextOrPreviousDay.Date))
+            if (_earlyCloses.ContainsKey(nextOrPreviousDay.Date) && !_marketHoursOverrides.ContainsKey(nextOrPreviousDay.Date))
             {
                 return null;
             }
 
-            var segments = GetMarketHours(nextOrPreviousDay).Segments;
+            var segments = GetMarketHours(nextOrPreviousDay).Segments.Where(segment =>
+                extendedMarketHours || segment.State == MarketHoursState.Market);
             return isNextDay ? segments.FirstOrDefault() : segments.LastOrDefault();
         }
 
@@ -450,6 +498,10 @@ namespace QuantConnect.Securities
         /// <returns>True if the market is always open, false otherwise</returns>
         private bool CheckIsMarketAlwaysOpen()
         {
+            if (_marketHoursOverrides.Values.Any(hours => !hours.IsOpenAllDay))
+            {
+                return false;
+            }
             LocalMarketHours marketHours = null;
             for (var i = 0; i < daysOfWeek.Count; i++)
             {
@@ -507,7 +559,7 @@ namespace QuantConnect.Securities
         /// <param name="localDateTime">The local date time to retrieve market hours for</param>
         /// <remarks>
         /// This method will return an adjusted instance of <see cref="LocalMarketHours"/> for the specified date,
-        /// that is, it will account for holidays, early closes, and late opens (e.g. if the security trades regularly on Mondays,
+        /// that is, it will account for dated overrides, holidays, early closes, and late opens (e.g. if the security trades regularly on Mondays,
         /// but a specific Monday is a holiday, this method will return a <see cref="LocalMarketHours"/> that is closed all day).
         /// In order to get the regular schedule, use the <see cref="MarketHours"/> property.
         /// </remarks>
@@ -517,6 +569,12 @@ namespace QuantConnect.Securities
             if (cachedMarketHours?.Date == localDateTime.Date)
             {
                 return cachedMarketHours.LocalMarketHours;
+            }
+
+            if (_marketHoursOverrides.TryGetValue(localDateTime.Date, out var datedHours))
+            {
+                _cachedMarketHours = new(datedHours, localDateTime);
+                return datedHours;
             }
 
             if (_holidays.Contains(localDateTime.Date.Ticks))
@@ -691,8 +749,10 @@ namespace QuantConnect.Securities
 
             _cachedMarketHours = null;
             _holidays = other._holidays;
+            _bankHolidays = other._bankHolidays;
             _earlyCloses = other._earlyCloses;
             _lateOpens = other._lateOpens;
+            _marketHoursOverrides = other._marketHoursOverrides;
             _sunday = other._sunday;
             _monday = other._monday;
             _tuesday = other._tuesday;
