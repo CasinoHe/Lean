@@ -94,7 +94,7 @@ namespace QuantConnect.DownloaderDataProvider.Launcher.Models
             var endUtc = dataDownloaderGetParameters.EndUtc;
             // Explicit UTC window is limited to futures intraday downloads. Date-only CLI
             // bounds still enclose it, and defaults for every other caller are unchanged.
-            if (symbol.SecurityType == SecurityType.Future && (resolution == Resolution.Minute || resolution == Resolution.Hour))
+            if (symbol.SecurityType == SecurityType.Future && (resolution == Resolution.Second || resolution == Resolution.Minute || resolution == Resolution.Hour))
             {
                 var first = Config.Get("data-downloader-futures-start-utc");
                 var last = Config.Get("data-downloader-futures-end-utc");

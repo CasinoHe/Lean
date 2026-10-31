@@ -18,6 +18,20 @@ namespace QuantConnect.Tests.Common.Util
     [TestFixture, NonParallelizable]
     public class BrokerageDownloaderHoursTests
     {
+        [TestCase("2026-03-08T07:30:00Z", "27000000")]
+        [TestCase("2026-11-01T07:30:00Z", "27000000")]
+        public void SecondDownloadSerializationPreservesUtcStartAcrossDst(string utc, string expectedSlot)
+        {
+            var start = DateTime.Parse(utc, null, System.Globalization.DateTimeStyles.AdjustToUniversal);
+            var symbol = Symbol.CreateFuture("ES", Market.CME, new DateTime(2026, 12, 18));
+            var bar = new TradeBar(start.ConvertFromUtc(TimeZones.NewYork), symbol, 100m, 102m, 99m, 101m, 3m, TimeSpan.FromSeconds(1));
+            var grouped = QuantConnect.Lean.Engine.DataFeeds.DownloaderDataProvider.FilterAndGroupDownloadDataBySymbol(
+                new[] { bar }, symbol, typeof(TradeBar), TimeZones.NewYork, NodaTime.DateTimeZone.Utc,
+                start.AddSeconds(-1), start.AddSeconds(2)).Single().Single();
+            var line = QuantConnect.Util.LeanData.GenerateLine(grouped, SecurityType.Future, Resolution.Second);
+            Assert.That(line, Is.EqualTo(expectedSlot + ",100,102,99,101,3"));
+        }
+
         [TestCase("America/New_York", 1, 0)]
         [TestCase("America/New_York", 2, 1)]
         [TestCase("America/Chicago", 1, 0)]
@@ -46,9 +60,10 @@ namespace QuantConnect.Tests.Common.Util
             Assert.That(result.Count(), Is.EqualTo(expected));
         }
 
-        [TestCase(SecurityType.Future, "2026-10-01T20:45:00Z", "2026-10-01T21:00:00Z", 20, 45, 21)]
-        [TestCase(SecurityType.Equity, "2026-10-01T20:45:00Z", "2026-10-01T21:00:00Z", 0, 0, 0)]
-        public void IntradayWindowIsOnlyAppliedToFutures(SecurityType type, string start, string end, int hour, int minute, int endHour)
+        [TestCase(SecurityType.Future, Resolution.Second, "2026-10-01T20:45:00Z", "2026-10-01T21:00:00Z", 20, 45, 21)]
+        [TestCase(SecurityType.Future, Resolution.Minute, "2026-10-01T20:45:00Z", "2026-10-01T21:00:00Z", 20, 45, 21)]
+        [TestCase(SecurityType.Equity, Resolution.Minute, "2026-10-01T20:45:00Z", "2026-10-01T21:00:00Z", 0, 0, 0)]
+        public void IntradayWindowIsOnlyAppliedToFutures(SecurityType type, Resolution resolution, string start, string end, int hour, int minute, int endHour)
         {
             const string firstKey = "data-downloader-futures-start-utc", lastKey = "data-downloader-futures-end-utc";
             var firstPrevious = Config.Get(firstKey, null); var lastPrevious = Config.Get(lastKey, null);
@@ -66,7 +81,7 @@ namespace QuantConnect.Tests.Common.Util
                 var symbol = type == SecurityType.Future
                     ? Symbol.CreateFuture("ES", Market.CME, new DateTime(2026, 12, 18))
                     : Symbol.Create("SPY", SecurityType.Equity, Market.USA);
-                downloader.Get(new DataDownloaderGetParameters(symbol, Resolution.Minute,
+                downloader.Get(new DataDownloaderGetParameters(symbol, resolution,
                     new DateTime(2026, 10, 1), new DateTime(2026, 10, 2), TickType.Trade)).ToList();
                 Assert.That(request.StartTimeUtc, Is.EqualTo(new DateTime(2026, 10, 1, hour, minute, 0)));
                 Assert.That(request.EndTimeUtc, Is.EqualTo(type == SecurityType.Future
