@@ -26,10 +26,14 @@ using QuantConnect.Data.Market;
 using System.Collections.Generic;
 using QuantConnect.DownloaderDataProvider.Launcher;
 using QuantConnect.DownloaderDataProvider.Launcher.Models;
+using NodaTime;
+using QuantConnect.Securities;
+using QuantConnect.Configuration;
 
 namespace QuantConnect.Tests.DownloaderDataProvider
 {
     [TestFixture]
+    [NonParallelizable]
     public class DownloadHelperTests
     {
         private IDataCacheProvider _cacheProvider;
@@ -74,6 +78,9 @@ namespace QuantConnect.Tests.DownloaderDataProvider
             var downloader = new DataDownloaderTest(mockBaseDate);
 
             Program.RunDownload(downloader, downloadDataConfig, _dataDirectory, _cacheProvider);
+
+            Assert.AreEqual(startDate, downloader.LastParameters.StartUtc);
+            Assert.AreEqual(endDate, downloader.LastParameters.EndUtc);
 
             var filePath = LeanData.GenerateZipFilePath(_dataDirectory, symbol, startDate, resolution, tickType);
             var fileNames = _cacheProvider.GetZipEntries(filePath);
@@ -140,9 +147,119 @@ namespace QuantConnect.Tests.DownloaderDataProvider
             }
         }
 
+        [TestCase("20260701", "20260702", 4, 4, Resolution.Hour)]
+        [TestCase("20260701", "20260702", 4, 4, Resolution.Minute)]
+        [TestCase("20260701", "20260702", 4, 4, Resolution.Second)]
+        [TestCase("20261102", "20261103", 5, 5, Resolution.Hour)]
+        [TestCase("20261102", "20261103", 5, 5, Resolution.Minute)]
+        [TestCase("20261102", "20261103", 5, 5, Resolution.Second)]
+        [TestCase("20260307", "20260310", 5, 4, Resolution.Minute)]
+        [TestCase("20261031", "20261103", 4, 5, Resolution.Second)]
+        [TestCase("20261224", "20261228", 5, 5, Resolution.Hour, "20261224", 17)]
+        [TestCase("20261224", "20261228", 5, 5, Resolution.Minute, "20261224", 17)]
+        [TestCase("20261224", "20261228", 5, 5, Resolution.Second, "20261224", 17)]
+        public void ExchangeLocalDatesUseDstAndExclusiveEnd(string startText, string endText,
+            int startUtcHour, int endUtcHour, Resolution resolution, string tailDateText = null, int tailCloseHour = 20)
+        {
+            var start = DateTime.ParseExact(startText, "yyyyMMdd", null);
+            var end = DateTime.ParseExact(endText, "yyyyMMdd", null);
+            var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+            Config.Set("data-type", "Trade");
+            Config.Set("resolution", resolution.ToString());
+            Config.Set("security-type", "Equity");
+            Config.Set("market", "usa");
+            Config.Set("tickers", "{\"SPY\":\"\"}");
+            Config.Set("start-date", startText);
+            Config.Set("end-date", endText);
+            Config.Set("download-date-time-zone", "America/New_York");
+            try
+            {
+                var config = new DataDownloadConfig();
+                var period = resolution.ToTimeSpan();
+                var tailDate = tailDateText == null ? end.AddDays(-1) : DateTime.ParseExact(tailDateText, "yyyyMMdd", null);
+                var lastBar = tailDate.AddHours(tailCloseHour).Subtract(period);
+                var times = new[] { start.AddTicks(-1), start, lastBar, end.AddTicks(-1), end };
+                var downloader = new DataDownloaderTest(times.Select(time => (BaseData)new TradeBar(
+                    time, Symbols.SPY, 10, 10, 10, 10, 100, period)).ToList());
+                Program.RunDownload(downloader, config, directory, _cacheProvider, mapSymbol: false);
+                Assert.AreEqual(start.AddHours(startUtcHour), downloader.LastParameters.StartUtc);
+                Assert.AreEqual(end.AddHours(endUtcHour).AddTicks(-1), downloader.LastParameters.EndUtc);
+                var files = Directory.GetFiles(directory, "*.zip", SearchOption.AllDirectories);
+                var rows = files.SelectMany(file => QuantConnect.Compression.Unzip(file))
+                    .SelectMany(member => member.Value).ToList();
+                Assert.AreEqual(3, rows.Count, "Include both range tails, exclude prior and next local dates");
+                var expectedTail = resolution == Resolution.Hour
+                    ? lastBar.ToString("yyyyMMdd HH:mm")
+                    : ((long)lastBar.TimeOfDay.TotalMilliseconds).ToString();
+                Assert.IsTrue(rows.Any(row => row.StartsWith(expectedTail + ",", StringComparison.Ordinal)),
+                    "Retain the preceding session's final raw after-hours bar across holidays");
+            }
+            finally
+            {
+                Config.Reset();
+                if (Directory.Exists(directory)) Directory.Delete(directory, true);
+            }
+        }
+
+        [Test]
+        public void EarlyClosePostmarketSurvivesLeanSessionTruncation()
+        {
+            var date = new DateTime(2026, 11, 27);
+            var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+            var zone = DateTimeZoneProviders.Tzdb["America/New_York"];
+            var hours = new SecurityExchangeHours(zone, new HashSet<DateTime>(),
+                new Dictionary<DayOfWeek, LocalMarketHours>
+                {
+                    [DayOfWeek.Friday] = new LocalMarketHours(DayOfWeek.Friday,
+                        TimeSpan.FromHours(4), TimeSpan.FromHours(9.5), TimeSpan.FromHours(16), TimeSpan.FromHours(20))
+                }, new Dictionary<DateTime, TimeSpan> { [date] = TimeSpan.FromHours(13) },
+                new Dictionary<DateTime, TimeSpan>());
+            Assert.IsFalse(hours.IsOpen(date.AddHours(16), extendedMarketHours: true),
+                "LEAN's early close truncates even the postmarket segment");
+            Config.Set("data-type", "Trade");
+            Config.Set("resolution", "Minute");
+            Config.Set("security-type", "Equity");
+            Config.Set("market", "usa");
+            Config.Set("tickers", "{\"SPY\":\"\"}");
+            Config.Set("start-date", "20261127");
+            Config.Set("end-date", "20261128");
+            Config.Set("download-date-time-zone", "America/New_York");
+            try
+            {
+                var downloader = new DataDownloaderTest(new[]
+                {
+                    new TradeBar(date.AddHours(16).AddMinutes(59), Symbols.SPY, 10, 10, 10, 10, 100, TimeSpan.FromMinutes(1))
+                });
+                Program.RunDownload(downloader, new DataDownloadConfig(), directory, _cacheProvider, mapSymbol: false);
+                Assert.AreEqual(date.AddDays(1).AddHours(5).AddTicks(-1), downloader.LastParameters.EndUtc);
+                Assert.AreEqual(1, Directory.GetFiles(directory, "*.zip", SearchOption.AllDirectories).Length);
+            }
+            finally
+            {
+                Config.Reset();
+                if (Directory.Exists(directory)) Directory.Delete(directory, true);
+            }
+        }
+
+        [TestCase(0)]
+        [TestCase(-1)]
+        public void EmptyOrReversedLocalRangeFailsBeforeCallingProvider(int days)
+        {
+            var date = new DateTime(2026, 11, 2);
+            var config = new DataDownloadConfig(TickType.Trade, SecurityType.Equity, Resolution.Minute,
+                date, date.AddDays(days), Market.USA, new List<Symbol> { Symbols.SPY })
+            {
+                DownloadDateTimeZone = DateTimeZoneProviders.Tzdb["America/New_York"]
+            };
+            var downloader = new DataDownloaderTest(Enumerable.Empty<BaseData>());
+            Assert.Throws<ArgumentException>(() => Program.RunDownload(downloader, config, _dataDirectory, _cacheProvider));
+            Assert.IsNull(downloader.LastParameters);
+        }
+
         private class DataDownloaderTest : IDataDownloader
         {
             public IEnumerable<BaseData> Data { get; }
+            public DataDownloaderGetParameters LastParameters { get; private set; }
 
             public DataDownloaderTest(IEnumerable<BaseData> data)
             {
@@ -151,6 +268,7 @@ namespace QuantConnect.Tests.DownloaderDataProvider
 
             public IEnumerable<BaseData> Get(DataDownloaderGetParameters dataDownloaderGetParameters)
             {
+                LastParameters = dataDownloaderGetParameters;
                 return Data.Select(x => x);
             }
         }
