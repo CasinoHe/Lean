@@ -16,6 +16,7 @@
 
 using QuantConnect.Util;
 using System.Globalization;
+using NodaTime;
 using QuantConnect.Logging;
 using QuantConnect.Brokerages;
 using QuantConnect.Configuration;
@@ -37,6 +38,12 @@ public abstract class BaseDataDownloadConfig
     /// Gets the end date for the data download.
     /// </summary>
     public DateTime EndDate { get; set; }
+
+    /// <summary>
+    /// Optional zone for date-only [StartDate, EndDate) download ranges.
+    /// Null preserves the legacy UTC, inclusive-end contract.
+    /// </summary>
+    public DateTimeZone? DownloadDateTimeZone { get; set; }
 
     /// <summary>
     /// Gets or sets the resolution of the downloaded data.
@@ -75,6 +82,9 @@ public abstract class BaseDataDownloadConfig
     {
         StartDate = ParseDate(Config.Get(DownloaderCommandArguments.CommandStartDate).ToString());
         EndDate = ParseDate(Config.Get(DownloaderCommandArguments.CommandEndDate).ToString());
+        var dateTimeZone = Config.Get("download-date-time-zone", "");
+        DownloadDateTimeZone = string.IsNullOrWhiteSpace(dateTimeZone)
+            ? null : DateTimeZoneProviders.Tzdb[dateTimeZone];
 
         SecurityType = ParseEnum<SecurityType>(Config.Get(DownloaderCommandArguments.CommandSecurityType).ToString());
 

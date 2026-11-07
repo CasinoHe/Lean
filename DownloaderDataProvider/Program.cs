@@ -108,9 +108,24 @@ public static class Program
         var completeSymbolCount = 0;
         var startDownloadUtcTime = DateTime.UtcNow;
 
+        var startUtc = dataDownloadConfig.StartDate;
+        var endUtc = dataDownloadConfig.EndDate;
+        if (dataDownloadConfig.DownloadDateTimeZone is { } dateTimeZone)
+        {
+            if (endUtc <= startUtc)
+            {
+                throw new ArgumentException("The exclusive download end date must be after the start date.");
+            }
+            startUtc = startUtc.ConvertToUtc(dateTimeZone);
+            // The provider and shared writer filter accept inclusive endpoints.
+            // Convert the next LOCAL midnight before subtracting a tick: UTC
+            // offsets can differ across DST, and a fixed UTC day is insufficient.
+            endUtc = endUtc.ConvertToUtc(dateTimeZone).AddTicks(-1);
+        }
+
         foreach (var symbol in dataDownloadConfig.Symbols)
         {
-            var downloadParameters = new DataDownloaderGetParameters(symbol, dataDownloadConfig.Resolution, dataDownloadConfig.StartDate, dataDownloadConfig.EndDate, dataDownloadConfig.TickType);
+            var downloadParameters = new DataDownloaderGetParameters(symbol, dataDownloadConfig.Resolution, startUtc, endUtc, dataDownloadConfig.TickType);
 
             Log.Trace($"DownloaderDataProvider.Main(): Starting download {downloadParameters}");
             var downloadedData = dataDownloader.Get(downloadParameters);
