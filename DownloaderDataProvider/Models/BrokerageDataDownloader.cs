@@ -92,6 +92,29 @@ namespace QuantConnect.DownloaderDataProvider.Launcher.Models
             var resolution = dataDownloaderGetParameters.Resolution;
             var startUtc = dataDownloaderGetParameters.StartUtc;
             var endUtc = dataDownloaderGetParameters.EndUtc;
+            // Explicit UTC window is limited to futures intraday downloads. Date-only CLI
+            // bounds still enclose it, and defaults for every other caller are unchanged.
+            if (symbol.SecurityType == SecurityType.Future && (resolution == Resolution.Second || resolution == Resolution.Minute || resolution == Resolution.Hour))
+            {
+                var first = Config.Get("data-downloader-futures-start-utc");
+                var last = Config.Get("data-downloader-futures-end-utc");
+                if (!string.IsNullOrWhiteSpace(first) || !string.IsNullOrWhiteSpace(last))
+                {
+                    if (!DateTimeOffset.TryParse(first, System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.None, out var from)
+                        || !DateTimeOffset.TryParse(last, System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.None, out var until)
+                        || from.Offset != TimeSpan.Zero || until.Offset != TimeSpan.Zero || from >= until
+                        || !(first.EndsWith("Z", StringComparison.OrdinalIgnoreCase) || first.EndsWith("+00:00"))
+                        || !(last.EndsWith("Z", StringComparison.OrdinalIgnoreCase) || last.EndsWith("+00:00")))
+                    {
+                        throw new ArgumentException("Futures downloader window requires an ordered pair of explicit UTC timestamps.");
+                    }
+                    startUtc = startUtc > from.UtcDateTime ? startUtc : from.UtcDateTime;
+                    endUtc = endUtc < until.UtcDateTime ? endUtc : until.UtcDateTime;
+                    if (startUtc >= endUtc) { return Enumerable.Empty<BaseData>(); }
+                }
+            }
             var tickType = dataDownloaderGetParameters.TickType;
 
             var dataType = LeanData.GetDataType(resolution, tickType);
@@ -109,7 +132,10 @@ namespace QuantConnect.DownloaderDataProvider.Launcher.Models
                 {
                     var request = new Data.HistoryRequest(startUtc, endUtc, dataType, symbol, resolution, exchangeHours: exchangeHours, dataTimeZone: dataTimeZone, resolution,
                         // let's not ask for extended market hours for hour and daily resolutions to match lean
-                        includeExtendedMarketHours: resolution != Resolution.Hour && resolution != Resolution.Daily, false, DataNormalizationMode.Raw, tickType);
+                        includeExtendedMarketHours: symbol.SecurityType == SecurityType.Future
+                            && !string.IsNullOrWhiteSpace(Config.Get("data-downloader-include-extended-market-hours"))
+                            ? Config.GetValue("data-downloader-include-extended-market-hours", resolution != Resolution.Hour && resolution != Resolution.Daily)
+                            : resolution != Resolution.Hour && resolution != Resolution.Daily, false, DataNormalizationMode.Raw, tickType);
 
                     var history = _brokerage.GetHistory(request);
 
